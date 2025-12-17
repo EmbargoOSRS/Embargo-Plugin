@@ -190,7 +190,7 @@ public class CollectionLogManager {
         }
     }
 
-    synchronized public void submitTask() {
+    public void submitTask() {
         // If sync hasn't been toggled to be allowed
         if (!syncButtonManager.isSyncAllowed()) {
             return;
@@ -201,21 +201,26 @@ public class CollectionLogManager {
             return;
         }
 
-        if (client.getLocalPlayer() == null) {
+        Player localPlayer = client.getLocalPlayer();
+        if (localPlayer == null) {
             log.debug("Skipped due to local player being null");
             return;
         }
 
-        String username = client.getLocalPlayer().getName();
+        String username = localPlayer.getName();
         RuneScapeProfileType profileType = RuneScapeProfileType.getCurrent(client);
         PlayerProfile profileKey = new PlayerProfile(username, profileType);
 
         PlayerData newPlayerData = getPlayerData();
-        PlayerData oldPlayerData = playerDataMap.computeIfAbsent(profileKey, k -> new PlayerData());
 
         // Do not send if slot data wasn't generated
         if (newPlayerData.rawClogItems.isEmpty()) {
             return;
+        }
+
+        PlayerData oldPlayerData;
+        synchronized (playerDataMap) {
+            oldPlayerData = playerDataMap.computeIfAbsent(profileKey, k -> new PlayerData());
         }
 
         submitPlayerData(profileKey, newPlayerData, oldPlayerData);

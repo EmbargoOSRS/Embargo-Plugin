@@ -1,5 +1,6 @@
 package gg.embargo.commands;
 
+import com.google.gson.JsonObject;
 import gg.embargo.DataManager;
 import gg.embargo.EmbargoConfig;
 import gg.embargo.commands.embargo.Rank;
@@ -14,8 +15,6 @@ import net.runelite.client.eventbus.EventBus;
 
 import javax.inject.Inject;
 import java.awt.*;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 
 @Slf4j
 public class CommandManager {
@@ -64,39 +63,39 @@ public class CommandManager {
         });
     }
 
+    // Helper method to build error messages
+    private String buildErrorMessage(String errorText) {
+        return new ChatMessageBuilder()
+                .append(ChatColorType.HIGHLIGHT)
+                .append(errorText)
+                .build();
+    }
+
     public void processEmbargoLookupChatCommand(ChatMessage chatMessage, String message) {
         int firstWhitespace = message.indexOf(' ');
         String memberName = (firstWhitespace != -1 && firstWhitespace + 1 < message.length())
                 ? message.substring(firstWhitespace + 1)
                 : chatMessage.getName().replaceAll("<[^>]*>", "");
 
-        String loadingMessage = new ChatMessageBuilder()
-                .append(ChatColorType.HIGHLIGHT)
-                .append("Looking up Embargo member...")
-                .build();
-
-        updateChatMessage(chatMessage, loadingMessage);
+        updateChatMessage(chatMessage, buildErrorMessage("Looking up Embargo member..."));
 
         String finalMemberName = memberName.replace('\u00A0', ' ').trim();
         dataManager.getProfileAsync(finalMemberName, true).thenAccept(embargoProfileData -> {
+            // Cache JSON object to avoid duplicate lookups
+            JsonObject leaderboardRank = embargoProfileData != null ? embargoProfileData.getAsJsonObject("leaderboardRank") : null;
+
             // Null checks for safety
             if (embargoProfileData == null
                     || embargoProfileData.get("accountPoints") == null
                     || embargoProfileData.getAsJsonPrimitive("communityPoints") == null
                     || embargoProfileData.getAsJsonPrimitive("currentRank") == null
-                    || embargoProfileData.getAsJsonObject("leaderboardRank") == null) {
-                String memberNotFound = new ChatMessageBuilder()
-                        .append(ChatColorType.HIGHLIGHT)
-                        .append("Error retrieving data for member: " + finalMemberName)
-                        .build();
-                updateChatMessage(chatMessage, memberNotFound);
+                    || leaderboardRank == null) {
+                updateChatMessage(chatMessage, buildErrorMessage("Error retrieving data for member: " + finalMemberName));
                 return;
             }
 
             String currentRankName = embargoProfileData.getAsJsonPrimitive("currentRank").getAsString();
-            String leaderboardPosition = embargoProfileData.getAsJsonObject("leaderboardRank").get("currentPosition")
-                    + "/"
-                    + embargoProfileData.getAsJsonObject("leaderboardRank").get("totalPositions");
+            String leaderboardPosition = leaderboardRank.get("currentPosition") + "/" + leaderboardRank.get("totalPositions");
             Color rankColor = Rank.getColorByName(currentRankName);
             Color labelColor = config.chatCommandOutputColor();
 
@@ -118,11 +117,7 @@ public class CommandManager {
 
             updateChatMessage(chatMessage, outputMessage);
         }).exceptionally(ex -> {
-            String memberNotFound = new ChatMessageBuilder()
-                    .append(ChatColorType.HIGHLIGHT)
-                    .append("Member " + finalMemberName + " not found.")
-                    .build();
-            updateChatMessage(chatMessage, memberNotFound);
+            updateChatMessage(chatMessage, buildErrorMessage("Member " + finalMemberName + " not found."));
             return null;
         });
     }
