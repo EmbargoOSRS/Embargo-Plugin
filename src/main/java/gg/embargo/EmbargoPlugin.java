@@ -238,17 +238,12 @@ public class EmbargoPlugin extends Plugin {
 	private void handleLoggedOut() {
 		log.debug("User logged out");
 
-		// Clear both panel references
 		if (embargoPanel != null) {
 			SwingUtilities.invokeLater(() -> embargoPanel.logOut());
-		} else {
-			log.debug("embargoPanel is null!!!");
-		}
-
-		// Also clear the panel reference (which is different from embargoPanel)
-		if (embargoPanel != null) {
 			embargoPanel.reset();
 			embargoPanel.updateLoggedIn(false);
+		} else {
+			log.debug("embargoPanel is null!!!");
 		}
 
 		// Clear data in DataManager to ensure complete reset
@@ -260,12 +255,7 @@ public class EmbargoPlugin extends Plugin {
 
 	@Schedule(period = SECONDS_BETWEEN_UPLOADS, unit = ChronoUnit.SECONDS, asynchronous = true)
 	public void ensureLatestManifest() {
-		if (manifestManager.getLatestManifest() != null) {
-			if (!(manifestManager.getLastCheckedManifestVersion() == manifestManager.getLatestManifest()
-					.getVersion())) {
-				manifestManager.getLatestManifest();
-			}
-		}
+		manifestManager.getLatestManifest();
 	}
 
 	@Schedule(period = SECONDS_BETWEEN_UPLOADS, unit = ChronoUnit.SECONDS, asynchronous = true)

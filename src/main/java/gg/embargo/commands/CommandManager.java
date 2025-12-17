@@ -83,7 +83,8 @@ public class CommandManager {
             if (embargoProfileData == null
                     || embargoProfileData.get("accountPoints") == null
                     || embargoProfileData.getAsJsonPrimitive("communityPoints") == null
-                    || embargoProfileData.getAsJsonPrimitive("currentRank") == null) {
+                    || embargoProfileData.getAsJsonPrimitive("currentRank") == null
+                    || embargoProfileData.getAsJsonObject("leaderboardRank") == null) {
                 String memberNotFound = new ChatMessageBuilder()
                         .append(ChatColorType.HIGHLIGHT)
                         .append("Error retrieving data for member: " + finalMemberName)

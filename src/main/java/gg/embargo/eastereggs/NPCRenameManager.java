@@ -32,7 +32,6 @@ public class NPCRenameManager {
         this.manifestManager = manifestManager;
     }
 
-    private final HashMap<String, String> npcListHashMap = new HashMap<>();
     private static final Set<MenuAction> NPC_MENU_ACTIONS = ImmutableSet.of(
             MenuAction.NPC_FIRST_OPTION,
             MenuAction.NPC_SECOND_OPTION,
@@ -106,19 +105,17 @@ public class NPCRenameManager {
             return;
         }
 
-        // Clear both maps
+        // Clear map
         customNPCRemaps.clear();
-        npcListHashMap.clear();
-        
+
         // Add default renames
         customNPCRemaps.putAll(DEFAULT_NPC_RENAMES);
 
-        // Add manifest renames to both maps
+        // Add manifest renames
         for (Map.Entry<String, String> entry : manifestManager.getManifest().getNpcRenames().entrySet()) {
             String originalName = entry.getKey();
             String newName = entry.getValue();
             customNPCRemaps.put(originalName, newName);
-            npcListHashMap.put(originalName, newName);
             //log.debug("NPCRename: Setting {} to {}", originalName, newName);
         }
     }

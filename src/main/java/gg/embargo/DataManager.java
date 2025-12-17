@@ -145,7 +145,8 @@ public class DataManager {
     private static final String CLOG_UNLOCK_ENDPOINT = API_URI + APIRoutes.UPLOAD_CLOG;
     private static final String GET_MEMBER_INFO_ENDPOINT = API_URI + APIRoutes.GET_MEMBER_INFO;
 
-    public static ArrayList BossesToTrack = null;
+    @Getter
+    private volatile List<String> bossesToTrack = null;
 
     public void storeVarbitChanged(int varbIndex, int varbValue) {
         synchronized (this) {
@@ -167,20 +168,17 @@ public class DataManager {
             return false;
         }
 
-        var bosses = getTrackableBosses();
-
-        for (Object boss : bosses) {
-            if (boss.equals(bossName)) {
-                return true;
-            }
+        List<String> bosses = getTrackableBosses();
+        if (bosses == null) {
+            return false;
         }
 
-        return false;
+        return bosses.contains(bossName);
     }
 
-    public ArrayList getTrackableBosses() {
-        if (BossesToTrack != null) {
-            return BossesToTrack;
+    public List<String> getTrackableBosses() {
+        if (bossesToTrack != null) {
+            return bossesToTrack;
         }
         okHttpClient.newCall(new Request.Builder().url(TRACK_MONSTERS_ENDPOINT).build()).enqueue(new Callback() {
             @Override
@@ -190,18 +188,17 @@ public class DataManager {
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                // Update what we want to track on the fly
-                if (response.isSuccessful()) {
-                    // convert response.body().string() to ArrayList<String>
-                    BufferedSource source = response.body().source();
-                    String json = source.readUtf8();
-                    response.close();
+                try (response) {
+                    // Update what we want to track on the fly
+                    if (response.isSuccessful()) {
+                        // convert response.body().string() to ArrayList<String>
+                        BufferedSource source = response.body().source();
+                        String json = source.readUtf8();
 
-                    // convert json to an ArrayList<String>
-                    BossesToTrack = gson.fromJson(json, ArrayList.class);
+                        // convert json to an ArrayList<String>
+                        BossesToTrack = gson.fromJson(json, ArrayList.class);
+                    }
                 }
-
-                response.close();
             }
         });
         return null;
@@ -220,14 +217,12 @@ public class DataManager {
 
                     @Override
                     public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                        // Update what we want to track on the fly
-                        if (response.isSuccessful()) {
-                            log.debug("Successfully uploaded new collection log slot");
-                            response.close();
-                            return;
+                        try (response) {
+                            // Update what we want to track on the fly
+                            if (response.isSuccessful()) {
+                                log.debug("Successfully uploaded new collection log slot");
+                            }
                         }
-
-                        response.close();
                     }
                 });
     }
@@ -247,11 +242,11 @@ public class DataManager {
 
                     @Override
                     public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                        if (response.isSuccessful()) {
-                            log.debug("Successfully uploaded raid preparation");
+                        try (response) {
+                            if (response.isSuccessful()) {
+                                log.debug("Successfully uploaded raid preparation");
+                            }
                         }
-
-                        response.close();
                     }
                 });
     }
@@ -271,11 +266,11 @@ public class DataManager {
 
                     @Override
                     public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                        if (response.isSuccessful()) {
-                            log.debug("Successfully uploaded minigame preparation");
+                        try (response) {
+                            if (response.isSuccessful()) {
+                                log.debug("Successfully uploaded minigame preparation");
+                            }
                         }
-
-                        response.close();
                     }
                 });
     }
@@ -357,14 +352,14 @@ public class DataManager {
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    BufferedSource source = response.body().source();
-                    String json = source.readUtf8();
-                    response.close();
-                    future.complete(gson.fromJson(json, JsonObject.class));
-                } else {
-                    response.close();
-                    future.complete(new JsonObject()); // Complete with empty object on unsuccessful response
+                try (response) {
+                    if (response.isSuccessful()) {
+                        BufferedSource source = response.body().source();
+                        String json = source.readUtf8();
+                        future.complete(gson.fromJson(json, JsonObject.class));
+                    } else {
+                        future.complete(new JsonObject()); // Complete with empty object on unsuccessful response
+                    }
                 }
             }
         });
@@ -662,40 +657,37 @@ public class DataManager {
                 return;
             }
 
-        if (client.getGameState() == GameState.LOGIN_SCREEN || client.getGameState() == GameState.HOPPING) {
-            return;
-        }
+            if (client.getGameState() == GameState.LOGIN_SCREEN || client.getGameState() == GameState.HOPPING) {
+                return;
+            }
 
-        try {
-            JsonObject payload = convertToJson();
+            try {
+                JsonObject payload = convertToJson();
 
-            okHttpClient.newCall(new Request.Builder().url(UNTRACKABLE_POST_ENDPOINT)
-                    .post(RequestBody.create(JSON, payload.toString())).build()).enqueue(new Callback() {
-                        @Override
-                        public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                            log.error(e.getLocalizedMessage());
-                            restoreData(payload);
-                            log.error("Failed to submit player in submitToAPI, restoring data. Cause of failure:", e);
-                        }
-
-                        @Override
-                        public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                            if (response.isSuccessful()) {
-                                log.debug("Successfully uploaded untrackable items");
-                                response.close();
-                                return;
-                            } else {
-                                response.close();
-                                log.error("submitToAPI onResponse returned, but without success");
+                okHttpClient.newCall(new Request.Builder().url(UNTRACKABLE_POST_ENDPOINT)
+                        .post(RequestBody.create(JSON, payload.toString())).build()).enqueue(new Callback() {
+                            @Override
+                            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                                log.error(e.getLocalizedMessage());
+                                restoreData(payload);
+                                log.error("Failed to submit player in submitToAPI, restoring data. Cause of failure:", e);
                             }
 
-                            response.close();
-                        }
-                    });
-        } catch (Exception e) {
-            log.error("Error preparing data for API submission", e);
-        }
-    });
+                            @Override
+                            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                                try (response) {
+                                    if (response.isSuccessful()) {
+                                        log.debug("Successfully uploaded untrackable items");
+                                    } else {
+                                        log.error("submitToAPI onResponse returned, but without success");
+                                    }
+                                }
+                            }
+                        });
+            } catch (Exception e) {
+                log.error("Error preparing data for API submission", e);
+            }
+        });
     }
 
     private HashSet<Integer> parseSet(JsonArray j) {
@@ -736,50 +728,49 @@ public class DataManager {
 
                 @Override
                 public void onResponse(@NonNull Call call, @NonNull Response response) {
-                    if (response.isSuccessful()) {
-                        try {
-                            // We want to be able to change the varbs and varps we get on the fly. To do so,
-                            // we tell
-                            // the client what to send the server on startup via the manifest.
-                            if (response.body() == null) {
-                                log.error("Manifest request succeeded but returned empty body");
-                                response.close();
-                            }
-
-                            JsonObject j = gson.fromJson(response.body().string(), JsonObject.class);
+                    try (response) {
+                        if (response.isSuccessful()) {
                             try {
-                                setVarbitsToCheck(parseSet(j.getAsJsonArray("varbits")));
-                                setVarpsToCheck(parseSet(j.getAsJsonArray("varps")));
-                                try {
-                                    int manifestVersion = j.get("version").getAsInt();
-                                    if (getLastManifestVersion() != manifestVersion) {
-                                        setLastManifestVersion(manifestVersion);
-                                        clientThread.invoke(() -> loadInitialData());
-                                    }
-                                } catch (UnsupportedOperationException | NullPointerException exception) {
-                                    setLastManifestVersion(-1);
+                                // We want to be able to change the varbs and varps we get on the fly. To do so,
+                                // we tell
+                                // the client what to send the server on startup via the manifest.
+                                if (response.body() == null) {
+                                    log.error("Manifest request succeeded but returned empty body");
+                                    return;
                                 }
-                            } catch (NullPointerException e) {
-                                log.error("Manifest possibly missing varbits or varps entry from /manifest call");
-                                log.error(e.getLocalizedMessage());
-                            } catch (ClassCastException e) {
-                                log.error("Manifest from /manifest call might have varbits or varps as not a list");
+
+                                JsonObject j = gson.fromJson(response.body().string(), JsonObject.class);
+                                try {
+                                    setVarbitsToCheck(parseSet(j.getAsJsonArray("varbits")));
+                                    setVarpsToCheck(parseSet(j.getAsJsonArray("varps")));
+                                    try {
+                                        int manifestVersion = j.get("version").getAsInt();
+                                        if (getLastManifestVersion() != manifestVersion) {
+                                            setLastManifestVersion(manifestVersion);
+                                            clientThread.invoke(() -> loadInitialData());
+                                        }
+                                    } catch (UnsupportedOperationException | NullPointerException exception) {
+                                        setLastManifestVersion(-1);
+                                    }
+                                } catch (NullPointerException e) {
+                                    log.error("Manifest possibly missing varbits or varps entry from /manifest call");
+                                    log.error(e.getLocalizedMessage());
+                                } catch (ClassCastException e) {
+                                    log.error("Manifest from /manifest call might have varbits or varps as not a list");
+                                    log.error(e.getLocalizedMessage());
+                                }
+                            } catch (IOException | JsonSyntaxException e) {
                                 log.error(e.getLocalizedMessage());
                             }
-                        } catch (IOException | JsonSyntaxException e) {
-                            log.error(e.getLocalizedMessage());
-                        } finally {
-                            response.close();
-                        }
-                    } else {
-                        log.error("Manifest request returned with status " + response.code());
-                        if (response.body() == null) {
-                            log.error("Manifest request returned empty body");
                         } else {
-                            log.error(response.body().toString());
+                            log.error("Manifest request returned with status " + response.code());
+                            if (response.body() == null) {
+                                log.error("Manifest request returned empty body");
+                            } else {
+                                log.error(response.body().toString());
+                            }
                         }
                     }
-                    response.close();
                 }
             });
         } catch (IllegalArgumentException e) {
@@ -803,49 +794,48 @@ public class DataManager {
 
                 @Override
                 public void onResponse(@NonNull Call call, Response response) throws IOException {
-                    if (response.isSuccessful()) {
-                        try {
-                            // We want to be able to change the varbs and varps we get on the fly. To do so,
-                            // we tell
-                            // the client what to send the server on startup via the manifest.
-                            if (response.body() == null) {
-                                log.error("Manifest request succeeded but returned empty body");
-                                response.close();
-                            }
-
-                            JsonObject j = gson.fromJson(response.body().string(), JsonObject.class);
-
+                    try (response) {
+                        if (response.isSuccessful()) {
                             try {
-                                try {
-                                    int manifestVersion = j.get("version").getAsInt();
-                                    if (manifestManager.getLatestManifest().getVersion() != manifestVersion) {
-                                        // update to use new manifest stuff
-                                        clientThread.invoke(() -> loadInitialData());
-                                    }
-                                } catch (UnsupportedOperationException | NullPointerException exception) {
-                                    setLastManifestVersion(-1);
+                                // We want to be able to change the varbs and varps we get on the fly. To do so,
+                                // we tell
+                                // the client what to send the server on startup via the manifest.
+                                if (response.body() == null) {
+                                    log.error("Manifest request succeeded but returned empty body");
+                                    return;
                                 }
-                            } catch (NullPointerException | ClassCastException e) {
+
+                                JsonObject j = gson.fromJson(response.body().string(), JsonObject.class);
+
+                                try {
+                                    try {
+                                        int manifestVersion = j.get("version").getAsInt();
+                                        if (manifestManager.getLatestManifest() != null && manifestManager.getLatestManifest().getVersion() != manifestVersion) {
+                                            // update to use new manifest stuff
+                                            clientThread.invoke(() -> loadInitialData());
+                                        }
+                                    } catch (UnsupportedOperationException | NullPointerException exception) {
+                                        setLastManifestVersion(-1);
+                                    }
+                                } catch (NullPointerException | ClassCastException e) {
+                                    log.error(e.getLocalizedMessage());
+                                }
+                            } catch (IOException | JsonSyntaxException e) {
                                 log.error(e.getLocalizedMessage());
                             }
-                        } catch (IOException | JsonSyntaxException e) {
-                            log.error(e.getLocalizedMessage());
-                        } finally {
-                            response.close();
-                        }
-                    } else {
-                        log.error("Manifest request returned with status " + response.code());
-                        if (response.body() == null) {
-                            log.error("Manifest request returned empty body");
                         } else {
-                            log.error(response.body().toString());
+                            log.error("Manifest request returned with status " + response.code());
+                            if (response.body() == null) {
+                                log.error("Manifest request returned empty body");
+                            } else {
+                                log.error(response.body().toString());
+                            }
                         }
                     }
-                    response.close();
                 }
             });
         } catch (IllegalArgumentException e) {
-            log.error("asd");
+            log.error("Error creating manifest request: Bad URL given - {}", e.getLocalizedMessage());
         }
         return -1;
     }
@@ -911,7 +901,7 @@ public class DataManager {
     @Schedule(period = 5 * 60, unit = ChronoUnit.SECONDS, asynchronous = true)
     public void resyncManifest() {
         // log.debug("Attempting to resync manifest");
-        if (manifestManager.getManifest().getVersion() != getLastManifestVersion()) {
+        if (manifestManager.getManifest() != null && manifestManager.getManifest().getVersion() != getLastManifestVersion()) {
             getManifest();
         }
     }

@@ -73,7 +73,7 @@ public class ManifestManager {
 
                 @Override
                 public void onResponse(@NonNull Call call, @NonNull Response response) {
-                    try (response; response) {
+                    try (response) {
                         if (response.isSuccessful()) {
                             try {
                                 if (response.body() == null) {

@@ -156,14 +156,14 @@ public class UntrackableItemManager {
             if (lastLootTime.containsKey(username)) {
                 LocalDateTime lastLootTimestamp = lastLootTime.get(username);
 
-                if (LocalDateTime.now().isBefore(lastLootTimestamp)) {
+                if (LocalDateTime.now().isBefore(lastLootTimestamp.plusMinutes(3))) {
                     log.debug("Player has opened bank within the last 3 minutes, not checking for untrackable items");
                     return;
                 }
 
             }
             getUntrackableItems(username);
-            lastLootTime.put(username, LocalDateTime.now().plusMinutes(3));
+            lastLootTime.put(username, LocalDateTime.now());
         }
     }
 }
