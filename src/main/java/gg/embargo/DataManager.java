@@ -189,14 +189,16 @@ public class DataManager {
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
                 try (response) {
-                    // Update what we want to track on the fly
-                    if (response.isSuccessful()) {
-                        // convert response.body().string() to ArrayList<String>
-                        BufferedSource source = response.body().source();
-                        String json = source.readUtf8();
-
-                        // convert json to an ArrayList<String>
-                        BossesToTrack = gson.fromJson(json, ArrayList.class);
+                    if (response.isSuccessful() && response.body() != null) {
+                        try {
+                            BufferedSource source = response.body().source();
+                            String json = source.readUtf8();
+                            List<String> bosses = gson.fromJson(json,
+                                new com.google.gson.reflect.TypeToken<List<String>>(){}.getType());
+                            bossesToTrack = Collections.unmodifiableList(bosses);
+                        } catch (JsonSyntaxException e) {
+                            log.error("Failed to parse boss list JSON", e);
+                        }
                     }
                 }
             }
@@ -353,12 +355,17 @@ public class DataManager {
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
                 try (response) {
-                    if (response.isSuccessful()) {
-                        BufferedSource source = response.body().source();
-                        String json = source.readUtf8();
-                        future.complete(gson.fromJson(json, JsonObject.class));
+                    if (response.isSuccessful() && response.body() != null) {
+                        try {
+                            BufferedSource source = response.body().source();
+                            String json = source.readUtf8();
+                            future.complete(gson.fromJson(json, JsonObject.class));
+                        } catch (JsonSyntaxException e) {
+                            log.error("Failed to parse profile JSON", e);
+                            future.complete(new JsonObject());
+                        }
                     } else {
-                        future.complete(new JsonObject()); // Complete with empty object on unsuccessful response
+                        future.complete(new JsonObject());
                     }
                 }
             }
@@ -430,27 +437,41 @@ public class DataManager {
                 @Override
                 public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
                     try (response) {
+                        if (response.body() == null) {
+                            log.error("Registration check returned null body for {}", username);
+                            callback.accept(false);
+                            return;
+                        }
+
                         if (response.isSuccessful()) {
-                            String responseBody = response.body().string();
-                            JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
-                            if (jsonResponse != null && jsonResponse.has("message") && "registered".equals(jsonResponse.get("message").getAsString())) {
-                                log.debug("{} is registered, return true", username);
-                                isUsernameRegistered.set(true);
-                                callback.accept(true);
-                            } else {
-                                log.debug("{} is NOT registered, return false", username);
-                                stopTryingForAccount.set(true);
+                            try {
+                                String responseBody = response.body().string();
+                                JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
+                                if (jsonResponse != null && jsonResponse.has("message") && "registered".equals(jsonResponse.get("message").getAsString())) {
+                                    log.debug("{} is registered, return true", username);
+                                    isUsernameRegistered.set(true);
+                                    callback.accept(true);
+                                } else {
+                                    log.debug("{} is NOT registered, return false", username);
+                                    stopTryingForAccount.set(true);
+                                    callback.accept(false);
+                                }
+                                apiFailureMode.set(false);
+                            } catch (JsonSyntaxException e) {
+                                log.error("Failed to parse registration response for {}", username, e);
                                 callback.accept(false);
                             }
-                            apiFailureMode.set(false);
-
                         } else {
-                            String responseBody = response.body().string();
-                            JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
-                            if (jsonResponse != null && jsonResponse.has("message") && "not registered".equals(jsonResponse.get("message").getAsString())) {
-                                stopTryingForAccount.set(true);
-                                callback.accept(false);
-                                return;
+                            try {
+                                String responseBody = response.body().string();
+                                JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
+                                if (jsonResponse != null && jsonResponse.has("message") && "not registered".equals(jsonResponse.get("message").getAsString())) {
+                                    stopTryingForAccount.set(true);
+                                    callback.accept(false);
+                                    return;
+                                }
+                            } catch (JsonSyntaxException e) {
+                                log.debug("Could not parse error response body for {}", username);
                             }
                             log.error("Failed to check if {} is registered with Embargo's database. Status: {}",
                                     username, response.code());
@@ -494,12 +515,13 @@ public class DataManager {
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    log.debug("Loot uploaded successfully");
-                } else {
-                    log.error("Loot upload failed with status " + response.code());
+                try (response) {
+                    if (response.isSuccessful()) {
+                        log.debug("Loot uploaded successfully");
+                    } else {
+                        log.error("Loot upload failed with status {}", response.code());
+                    }
                 }
-                response.close();
             }
         });
     }

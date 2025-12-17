@@ -51,10 +51,10 @@ public class Manifest
     public Map<String, String> minigameCompletionMessages = new HashMap<>();
 
     //Collection log
-    public final ArrayList<Integer> collections = new ArrayList<>();
+    public final List<Integer> collections = new ArrayList<>();
 
     //Easter egg
-    public Map<String, String> itemRenames = new HashMap<>();
-    public Map<String, String> npcRenames = new HashMap<>();
+    public final Map<String, String> itemRenames = new HashMap<>();
+    public final Map<String, String> npcRenames = new HashMap<>();
 
 }

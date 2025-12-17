@@ -33,6 +33,7 @@ public class ItemRenameManager {
     }
 
     private boolean manifestFetchAttempted = false;
+    private boolean manifestParsed = false;
 
     private static final Set<MenuAction> ITEM_MENU_ACTIONS = ImmutableSet.of(
             MenuAction.GROUND_ITEM_FIRST_OPTION, MenuAction.GROUND_ITEM_SECOND_OPTION,
@@ -61,21 +62,13 @@ public class ItemRenameManager {
             return;
         }
 
-        if (manifestManager.getManifest() == null) {
-            manifestManager.getLatestManifest();
-            return;
+        if (!manifestParsed && manifestManager.getManifest() != null) {
+            parseManifest();
         }
 
-        // Check if manifest is empty and fetch if needed
-        if (manifestManager.getManifest().getItemRenames() == null) {
-            manifestManager.getLatestManifest();
-        }
-
-        parseManifest();
-        
         MenuEntry entry = event.getMenuEntry();
         if (ITEM_MENU_ACTIONS.contains(entry.getType())) {
-            remapMenuEntryText(entry, customItemRemap);
+            remapMenuEntryText(entry);
         }
     }
 
@@ -99,36 +92,42 @@ public class ItemRenameManager {
     }
 
     public void parseManifest() {
-        if (manifestManager.getManifest().getItemRenames() == null || manifestManager.getManifest().getItemRenames().isEmpty()) {
+        if (manifestManager.getManifest() == null ||
+            manifestManager.getManifest().getItemRenames() == null ||
+            manifestManager.getManifest().getItemRenames().isEmpty()) {
             if (!manifestFetchAttempted) {
+                manifestFetchAttempted = true;
+                manifestManager.getLatestManifest();
                 log.debug("manifest.itemRenames is empty, attempting to refetch");
             }
             return;
         }
 
-        for (Map.Entry<String, String> entry : manifestManager.getManifest().getItemRenames().entrySet()) {
-            String originalName = entry.getKey();
-            String newName = entry.getValue();
-            customItemRemap.put(originalName, newName);
-        }
+        // Clear and rebuild map
+        customItemRemap.clear();
+        customItemRemap.putAll(DEFAULT_ITEM_REMAP);
+        customItemRemap.putAll(manifestManager.getManifest().getItemRenames());
+
+        manifestParsed = true;
+        log.debug("Parsed {} item renames from manifest", customItemRemap.size());
     }
 
     /**
-     * Remaps a menu entry's text if the target matches an entry in the provided map.
-     * 
+     * Remaps a menu entry's text if the target matches an entry in the custom item map.
+     *
      * @param menuEntry The menu entry to modify
-     * @param map The map of item names to replacement item names
      */
-    private void remapMenuEntryText(MenuEntry menuEntry, Map<String, String> map) {
-        String target = menuEntry.getTarget();
-        String cleanTarget;
-        
+    private void remapMenuEntryText(MenuEntry menuEntry) {
+        if (customItemRemap.isEmpty()) {
+            return;
+        }
+
         NPC npc = menuEntry.getNpc();
-        cleanTarget = npc != null ? Text.removeTags(npc.getName()) : Text.removeTags(target);
-        
-        String replacement = map.get(cleanTarget);
+        String cleanTarget = npc != null ? Text.removeTags(npc.getName()) : Text.removeTags(menuEntry.getTarget());
+
+        String replacement = customItemRemap.get(cleanTarget);
         if (replacement != null) {
-            menuEntry.setTarget(target.replace(cleanTarget, replacement));
+            menuEntry.setTarget(menuEntry.getTarget().replace(cleanTarget, replacement));
         }
     }
 }

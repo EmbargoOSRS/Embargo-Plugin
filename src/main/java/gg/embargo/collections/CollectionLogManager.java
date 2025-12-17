@@ -63,7 +63,7 @@ public class CollectionLogManager {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private final Map<PlayerProfile, PlayerData> playerDataMap = new HashMap<>();
     private int cyclesSinceSuccessfulCall = 0;
-    private static List<Map<String, Map<String, Object>>> rawClogItems = new ArrayList<>();
+    private final List<Map<String, Map<String, Object>>> rawClogItems = new ArrayList<>();
     private int tickCollectionLogScriptFired = -1;
 
     private SyncButtonManager syncButtonManager;
@@ -268,8 +268,6 @@ public class CollectionLogManager {
                     }
                     merge(old, delta);
                     cyclesSinceSuccessfulCall = 0;
-                } finally {
-                    response.close();
                 }
             }
         });
