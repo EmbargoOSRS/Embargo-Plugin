@@ -262,7 +262,9 @@ public class CollectionLogManager {
             @Override
             public void onFailure(Call call, IOException e) {
                 log.debug("Failed to submit: ", e);
-                client.addChatMessage(ChatMessageType.CONSOLE, "Embargo", "Failed to sync collection log data with Embargo.", "Embargo");
+                clientThread.invokeLater(() ->
+                    client.addChatMessage(ChatMessageType.CONSOLE, "Embargo", "Failed to sync collection log data with Embargo.", "Embargo")
+                );
             }
 
             @Override
@@ -270,12 +272,17 @@ public class CollectionLogManager {
                 try (response) {
                     if (!response.isSuccessful()) {
                         log.debug("Failed to submit: {}", response.code());
-                        client.addChatMessage(ChatMessageType.CONSOLE, "Embargo", "Failed to sync collection log data with Embargo (error " + response.code() + ").", "Embargo");
+                        int errorCode = response.code();
+                        clientThread.invokeLater(() ->
+                            client.addChatMessage(ChatMessageType.CONSOLE, "Embargo", "Failed to sync collection log data with Embargo (error " + errorCode + ").", "Embargo")
+                        );
                         return;
                     }
                     merge(old, delta);
                     cyclesSinceSuccessfulCall = 0;
-                    client.addChatMessage(ChatMessageType.CONSOLE, "Embargo", "Successfully synced collection log data with Embargo!", "Embargo");
+                    clientThread.invokeLater(() ->
+                        client.addChatMessage(ChatMessageType.CONSOLE, "Embargo", "Successfully synced collection log data with Embargo!", "Embargo")
+                    );
                 }
             }
         });
