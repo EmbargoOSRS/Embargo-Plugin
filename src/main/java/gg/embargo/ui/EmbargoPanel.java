@@ -238,20 +238,15 @@ public class EmbargoPanel extends PluginPanel {
                     // This code runs when the profile data is received
                     // We need to run UI updates on the client thread
                     clientThread.invokeLater(() -> {
-                        JsonElement currentAccountPoints = embargoProfileData.get("accountPoints");
-                        JsonElement currentCommunityPoints = embargoProfileData
-                                .getAsJsonPrimitive("communityPoints");
+                        int accountPoints = embargoProfileData.get("accountPoints").getAsInt();
+                        int communityPoints = embargoProfileData.get("communityPoints").getAsInt();
 
-                        embargoScoreLabel.setText((htmlLabel("Embargo Score:", " " +
-                                (Integer.parseInt(String.valueOf(currentAccountPoints)) +
-                                        Integer.parseInt(String.valueOf(currentCommunityPoints))))));
+                        embargoScoreLabel.setText(htmlLabel("Embargo Score:", " " + (accountPoints + communityPoints)));
 
                         JsonElement getCurrentCAName = embargoProfileData.get("currentHighestCAName");
-                        accountScoreLabel.setText(htmlLabel("Account Score: ",
-                                String.valueOf(Integer.parseInt(String.valueOf(currentAccountPoints)))));
+                        accountScoreLabel.setText(htmlLabel("Account Score: ", String.valueOf(accountPoints)));
 
-                        communityScoreLabel.setText(htmlLabel("Community Score: ",
-                                String.valueOf(Integer.parseInt(String.valueOf(currentCommunityPoints)))));
+                        communityScoreLabel.setText(htmlLabel("Community Score: ", String.valueOf(communityPoints)));
 
                         JsonArray missingGearReqs = embargoProfileData.getAsJsonArray("missingGearRequirements");
                         JsonArray missingUntradableItemIdReqs = embargoProfileData

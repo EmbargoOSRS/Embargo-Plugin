@@ -10,8 +10,6 @@ import okhttp3.*;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.IOException;
-import java.io.StringReader;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
@@ -81,16 +79,15 @@ public class ManifestManager {
                                     return;
                                 }
 
-                                setManifest(gson.fromJson(
-                                        new StringReader(new String(response.body().bytes(), StandardCharsets.UTF_8)),
-                                        Manifest.class));
+                                String json = response.body().string();
+                                setManifest(gson.fromJson(json, Manifest.class));
                                 log.debug("Set manifest");
 
-                                // Update the timestamp
+                                // Update the timestamp and version
                                 lastCheckTimestamp = currentTime;
 
                                 if (lastCheckedManifestVersion != manifest.getVersion()) {
-                                    log.debug("Setting manifest version to {}", manifest.getVersion());
+                                    log.debug("Manifest version updated from {} to {}", lastCheckedManifestVersion, manifest.getVersion());
                                     lastCheckedManifestVersion = manifest.getVersion();
                                 }
                             } catch (JsonSyntaxException e) {

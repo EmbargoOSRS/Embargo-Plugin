@@ -80,6 +80,8 @@ public class NPCRenameManager {
 
     public void shutDown() {
         customNPCRemaps.clear();
+        manifestParsed = false;
+        manifestFetchAttempted = false;
         eventBus.unregister(this);
     }
 
@@ -119,11 +121,12 @@ public class NPCRenameManager {
         }
 
         NPC npc = menuEntry.getNpc();
-        String cleanTarget = npc != null ? Text.removeTags(npc.getName()) : Text.removeTags(menuEntry.getTarget());
+        String target = menuEntry.getTarget();
+        String cleanTarget = npc != null ? Text.removeTags(npc.getName()) : Text.removeTags(target);
 
         String replacement = customNPCRemaps.get(cleanTarget);
         if (replacement != null) {
-            menuEntry.setTarget(menuEntry.getTarget().replace(cleanTarget, replacement));
+            menuEntry.setTarget(target.replace(cleanTarget, replacement));
         }
     }
 }
