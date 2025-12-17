@@ -23,6 +23,8 @@ import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.util.Text;
 import net.runelite.client.callback.ClientThread;
 
+import java.util.HashSet;
+import java.util.Set;
 
 import javax.inject.Inject;
 
@@ -53,19 +55,32 @@ public class NoticeBoardManager {
     private static final int ENDING_PARTY_CHILD_ID = 62;
 
     private void setNoticeBoardWidget(int parent, int index, int clanColor) {
+        if (client.getClanChannel() == null) {
+            return;
+        }
+
+        // Build set of clan member Jagex names for O(1) lookup
+        Set<String> clanMemberJagexNames = new java.util.HashSet<>();
+        for (ClanChannelMember member : client.getClanChannel().getMembers()) {
+            clanMemberJagexNames.add(Text.toJagexName(member.getName()));
+        }
+
+        int targetColor = config.highlightClan() ? clanColor : DEFAULT_RGB;
+
         for (int childID = STARTING_PARTY_CHILD_ID; childID < ENDING_PARTY_CHILD_ID; ++childID) {
             Widget noticeBoard = client.getWidget(parent, childID);
 
-            if (noticeBoard != null && noticeBoard.getName() != null && noticeBoard.getChildren() != null) {
+            if (noticeBoard == null || noticeBoard.getName() == null || noticeBoard.getChildren() == null) {
+                continue;
+            }
+
+            String noticeBoardJagexName = Text.removeTags(noticeBoard.getName());
+
+            // O(1) lookup instead of O(n) iteration
+            if (clanMemberJagexNames.contains(noticeBoardJagexName)) {
                 for (Widget noticeBoardChild : noticeBoard.getChildren()) {
                     if (noticeBoardChild.getIndex() == index) {
-                        if (client.getClanChannel() != null) {
-                            for (ClanChannelMember member : client.getClanChannel().getMembers()) {
-                                if (Text.toJagexName(member.getName()).equals(Text.removeTags(noticeBoard.getName()))) {
-                                    noticeBoardChild.setTextColor(config.highlightClan() ? clanColor : DEFAULT_RGB);
-                                }
-                            }
-                        }
+                        noticeBoardChild.setTextColor(targetColor);
                     }
                 }
             }
@@ -74,19 +89,33 @@ public class NoticeBoardManager {
 
     private void setApplicationWidget(int parent, int child, int clanColor) {
         Widget acceptWidgetMembers = client.getWidget(parent, child);
-        if (acceptWidgetMembers != null && acceptWidgetMembers.getChildren() != null) {
-            Widget[] acceptWidgetChildren = acceptWidgetMembers.getChildren();
-            for (Widget w : acceptWidgetChildren) {
-                if (client != null && client.getClanChannel() != null) {
-                    for (ClanChannelMember member : client.getClanChannel().getMembers()) {
-                        if (w.getText().contains(member.getName())) {
-                            String hex = Integer.toHexString(clanColor).substring(2);
-                            String builtName = "<col=" + hex + ">" + member.getName() + "</col>";
-                            w.setName("<col=" + hex + ">" + member.getName() + "</col>");
-                            w.setText(builtName);
-                        }
-                    }
+        if (acceptWidgetMembers == null || acceptWidgetMembers.getChildren() == null) {
+            return;
+        }
 
+        if (client.getClanChannel() == null) {
+            return;
+        }
+
+        // Build member name set for O(1) lookup instead of O(n) iteration
+        Set<String> clanMemberNames = new java.util.HashSet<>();
+        for (ClanChannelMember member : client.getClanChannel().getMembers()) {
+            clanMemberNames.add(member.getName());
+        }
+
+        // Cache hex color conversion - don't recalculate for every widget
+        String hex = Integer.toHexString(clanColor).substring(2);
+
+        Widget[] acceptWidgetChildren = acceptWidgetMembers.getChildren();
+        for (Widget w : acceptWidgetChildren) {
+            String widgetText = w.getText();
+            // Check if widget text contains any clan member name
+            for (String memberName : clanMemberNames) {
+                if (widgetText.contains(memberName)) {
+                    String coloredName = "<col=" + hex + ">" + memberName + "</col>";
+                    w.setName(coloredName);
+                    w.setText(coloredName);
+                    break; // Found match, no need to check other members
                 }
             }
         }
