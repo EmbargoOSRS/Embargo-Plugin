@@ -7,6 +7,7 @@ import gg.embargo.eastereggs.NPCRenameManager;
 import gg.embargo.manifest.ManifestManager;
 import gg.embargo.ui.EmbargoPanel;
 import gg.embargo.eastereggs.ItemRenameManager;
+import gg.embargo.ui.MissingRequirementsPanel;
 import gg.embargo.ui.SyncButtonManager;
 import gg.embargo.noticeboard.NoticeBoardManager;
 import gg.embargo.untrackables.UntrackableItemManager;
@@ -171,6 +172,9 @@ public class EmbargoPlugin extends Plugin {
 		}
 	}
 
+	@Inject
+	private MissingRequirementsPanel missingRequirementsPanel;
+
 	@Override
 	protected void shutDown() {
 		log.info("Embargo Clan plugin stopped!");
@@ -178,6 +182,11 @@ public class EmbargoPlugin extends Plugin {
 		dataManager.clearData();
 		embargoPanel.reset();
 		clientToolbar.removeNavigation(navButton);
+
+		// Cleanup MissingRequirementsPanel to prevent timer and cache leaks
+		if (missingRequirementsPanel != null) {
+			missingRequirementsPanel.shutdown();
+		}
 
 		shutDownManagers();
 

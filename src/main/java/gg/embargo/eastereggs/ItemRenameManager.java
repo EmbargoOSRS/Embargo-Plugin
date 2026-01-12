@@ -106,6 +106,10 @@ public class ItemRenameManager {
             return;
         }
 
+        // Clear and repopulate to prevent unbounded accumulation
+        customItemRemap.clear();
+        customItemRemap.putAll(DEFAULT_ITEM_REMAP);
+
         for (Map.Entry<String, String> entry : manifestManager.getManifest().getItemRenames().entrySet()) {
             String originalName = entry.getKey();
             String newName = entry.getValue();

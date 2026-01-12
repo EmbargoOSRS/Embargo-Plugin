@@ -107,6 +107,9 @@ public class DataManager {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
+    // Reusable short timeout client - created lazily, shares connection pool with main client
+    private volatile OkHttpClient shortTimeoutClient;
+
     enum APIRoutes {
         MANIFEST("runelite/manifest"),
         UNTRACKABLES("untrackables"),
@@ -145,7 +148,8 @@ public class DataManager {
     private static final String CLOG_UNLOCK_ENDPOINT = API_URI + APIRoutes.UPLOAD_CLOG;
     private static final String GET_MEMBER_INFO_ENDPOINT = API_URI + APIRoutes.GET_MEMBER_INFO;
 
-    public static ArrayList BossesToTrack = null;
+    // Boss list from API - use volatile for thread safety and instance field for proper cleanup
+    private volatile List<String> bossesToTrack = null;
 
     public void storeVarbitChanged(int varbIndex, int varbValue) {
         synchronized (this) {
@@ -167,20 +171,17 @@ public class DataManager {
             return false;
         }
 
-        var bosses = getTrackableBosses();
-
-        for (Object boss : bosses) {
-            if (boss.equals(bossName)) {
-                return true;
-            }
+        List<String> bosses = getTrackableBosses();
+        if (bosses == null) {
+            return false;
         }
 
-        return false;
+        return bosses.contains(bossName);
     }
 
-    public ArrayList getTrackableBosses() {
-        if (BossesToTrack != null) {
-            return BossesToTrack;
+    public List<String> getTrackableBosses() {
+        if (bossesToTrack != null) {
+            return bossesToTrack;
         }
         okHttpClient.newCall(new Request.Builder().url(TRACK_MONSTERS_ENDPOINT).build()).enqueue(new Callback() {
             @Override
@@ -190,21 +191,28 @@ public class DataManager {
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                // Update what we want to track on the fly
-                if (response.isSuccessful()) {
-                    // convert response.body().string() to ArrayList<String>
-                    BufferedSource source = response.body().source();
-                    String json = source.readUtf8();
+                try {
+                    if (response.isSuccessful() && response.body() != null) {
+                        String json = response.body().string();
+                        // Parse as List<String> with proper type safety
+                        List<String> parsed = gson.fromJson(json, new com.google.gson.reflect.TypeToken<List<String>>(){}.getType());
+                        if (parsed != null) {
+                            bossesToTrack = parsed;
+                        }
+                    }
+                } finally {
                     response.close();
-
-                    // convert json to an ArrayList<String>
-                    BossesToTrack = gson.fromJson(json, ArrayList.class);
                 }
-
-                response.close();
             }
         });
         return null;
+    }
+
+    /**
+     * Clears the cached boss list. Called during cleanup.
+     */
+    public void clearBossCache() {
+        bossesToTrack = null;
     }
 
     public void uploadCollectionLogUnlock(String item, String player) {
@@ -418,10 +426,12 @@ public class DataManager {
                     .get()
                     .build();
 
-            // Create a client with shorter timeout for this specific check
-            OkHttpClient shortTimeoutClient = okHttpClient.newBuilder()
-                    .callTimeout(5, TimeUnit.SECONDS)
-                    .build();
+            // Lazily create short timeout client once and reuse (shares connection pool with main client)
+            if (shortTimeoutClient == null) {
+                shortTimeoutClient = okHttpClient.newBuilder()
+                        .callTimeout(5, TimeUnit.SECONDS)
+                        .build();
+            }
 
             shortTimeoutClient.newCall(request).enqueue(new Callback() {
                 @Override
