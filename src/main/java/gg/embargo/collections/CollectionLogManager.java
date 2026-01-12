@@ -61,9 +61,18 @@ public class CollectionLogManager {
 
     private static final String SUBMIT_URL = "https://embargo.gg/api/runelite/uploadcollectionlog";
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-    private final Map<PlayerProfile, PlayerData> playerDataMap = new HashMap<>();
+
+    // Limit playerDataMap size to prevent unbounded growth - LRU eviction
+    private static final int MAX_PLAYER_DATA_CACHE_SIZE = 10;
+    private final Map<PlayerProfile, PlayerData> playerDataMap = new LinkedHashMap<PlayerProfile, PlayerData>(MAX_PLAYER_DATA_CACHE_SIZE, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<PlayerProfile, PlayerData> eldest) {
+            return size() > MAX_PLAYER_DATA_CACHE_SIZE;
+        }
+    };
     private int cyclesSinceSuccessfulCall = 0;
-    private static List<Map<String, Map<String, Object>>> rawClogItems = new ArrayList<>();
+    // Use instance field instead of static to allow proper cleanup per instance
+    private final List<Map<String, Map<String, Object>>> rawClogItems = new ArrayList<>();
     private int tickCollectionLogScriptFired = -1;
 
     private SyncButtonManager syncButtonManager;
@@ -124,6 +133,7 @@ public class CollectionLogManager {
     public void shutDown() {
         eventBus.unregister(this);
         rawClogItems.clear();
+        playerDataMap.clear();
         syncButtonManager.shutDown();
     }
 
