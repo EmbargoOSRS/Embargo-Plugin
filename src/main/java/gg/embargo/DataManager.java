@@ -107,9 +107,6 @@ public class DataManager {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    // Reusable short timeout client - created lazily, shares connection pool with main client
-    private volatile OkHttpClient shortTimeoutClient;
-
     enum APIRoutes {
         MANIFEST("runelite/manifest"),
         UNTRACKABLES("untrackables"),
@@ -426,14 +423,7 @@ public class DataManager {
                     .get()
                     .build();
 
-            // Lazily create short timeout client once and reuse (shares connection pool with main client)
-            if (shortTimeoutClient == null) {
-                shortTimeoutClient = okHttpClient.newBuilder()
-                        .callTimeout(5, TimeUnit.SECONDS)
-                        .build();
-            }
-
-            shortTimeoutClient.newCall(request).enqueue(new Callback() {
+            okHttpClient.newCall(request).enqueue(new Callback() {
                 @Override
                 public void onFailure(@NonNull Call call, @NonNull IOException e) {
                     log.error("Failed to check if {} is registered with Embargo's database", username);
