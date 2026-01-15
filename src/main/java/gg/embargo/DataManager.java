@@ -70,6 +70,9 @@ public class DataManager {
     @Inject
     private ClientThread clientThread;
 
+    // Do not manually instantiate OkHttpClient with new OkHttpClient().
+    // Use @Inject to get RuneLite's shared OkHttpClient instance instead.
+    // If you need custom timeouts, use okHttpClient.newBuilder() to derive a client that shares the connection pool.
     @Inject
     private OkHttpClient okHttpClient;
 
