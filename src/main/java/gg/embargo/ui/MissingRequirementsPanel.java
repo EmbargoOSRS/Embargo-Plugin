@@ -21,7 +21,9 @@ import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.util.*;
 import java.util.List;
-import java.util.Timer;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class MissingRequirementsPanel extends PluginPanel {
@@ -51,10 +53,11 @@ public class MissingRequirementsPanel extends PluginPanel {
             });
     private volatile boolean isUpdating = false;
 
-    // Track active timers for cleanup to prevent memory leaks
-    private final List<Timer> activeTimers = Collections.synchronizedList(new ArrayList<>());
+    // Track scheduled futures for cleanup to prevent memory leaks
+    private final List<ScheduledFuture<?>> scheduledFutures = Collections.synchronizedList(new ArrayList<>());
 
     private final ItemManager itemManager;
+    private final ScheduledExecutorService executorService;
     private final JPanel itemsContainer;
     private final List<MissingItem> missingItems = new ArrayList<>();
     private final MouseAdapter itemMouseAdapter = createMouseAdapter();
@@ -84,9 +87,10 @@ public class MissingRequirementsPanel extends PluginPanel {
     }
 
     @Inject
-    public MissingRequirementsPanel(ItemManager itemManager) {
+    public MissingRequirementsPanel(ItemManager itemManager, ScheduledExecutorService executorService) {
         super(false);
         this.itemManager = itemManager;
+        this.executorService = executorService;
 
         setLayout(new BorderLayout());
         setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -309,7 +313,7 @@ public class MissingRequirementsPanel extends PluginPanel {
      */
     public void clearItems() {
         synchronized (lock) {
-            cancelAllTimers();
+            cancelAllScheduledFutures();
             if (!missingItems.isEmpty()) {
                 missingItems.clear();
                 updatePanel();
@@ -318,25 +322,25 @@ public class MissingRequirementsPanel extends PluginPanel {
     }
 
     /**
-     * Cancels all active timers to prevent memory leaks.
+     * Cancels all scheduled futures to prevent memory leaks.
      * Must be called before recreating panels or during cleanup.
      */
-    private void cancelAllTimers() {
-        synchronized (activeTimers) {
-            for (Timer timer : activeTimers) {
-                timer.cancel();
+    private void cancelAllScheduledFutures() {
+        synchronized (scheduledFutures) {
+            for (ScheduledFuture<?> future : scheduledFutures) {
+                future.cancel(true);
             }
-            activeTimers.clear();
+            scheduledFutures.clear();
         }
     }
 
     /**
      * Cleanup method to be called when the plugin is shutting down.
-     * Cancels all timers and clears caches to prevent memory leaks.
+     * Cancels all scheduled futures and clears caches to prevent memory leaks.
      */
     public void shutdown() {
         synchronized (lock) {
-            cancelAllTimers();
+            cancelAllScheduledFutures();
             missingItems.clear();
             iconCache.clear();
             letterIconCache.clear();
@@ -356,8 +360,8 @@ public class MissingRequirementsPanel extends PluginPanel {
             isUpdating = true;
             SwingUtilities.invokeLater(() -> {
                 synchronized (lock) {
-                    // Cancel existing timers before rebuilding panels to prevent leaks
-                    cancelAllTimers();
+                    // Cancel existing scheduled futures before rebuilding panels to prevent leaks
+                    cancelAllScheduledFutures();
                     itemsContainer.removeAll();
                     for (MissingItem item : missingItems) {
                         JPanel itemPanel = createItemPanel(item);
@@ -394,29 +398,23 @@ public class MissingRequirementsPanel extends PluginPanel {
             // Track the current index for click events
             final int[] currentIdx = { 0 };
 
-            // Use daemon timer so it doesn't prevent JVM shutdown
-            Timer timer = new Timer(true);
-            timer.scheduleAtFixedRate(new TimerTask() {
-                int idx = 0;
+            // Use ScheduledExecutorService for icon rotation (RuneLite best practice)
+            ScheduledFuture<?> future = executorService.scheduleAtFixedRate(() -> {
+                SwingUtilities.invokeLater(() -> {
+                    int idx = (currentIdx[0] + 1) % dyn.names.length;
+                    currentIdx[0] = idx;
+                    iconLabel.setIcon(new ImageIcon(dyn.icons.get(idx)));
+                    String tooltip = buildTooltipText(
+                            new MissingItem(dyn.names[idx], dyn.itemIds[idx], dyn.icons.get(idx)));
+                    iconLabel.setToolTipText(tooltip);
+                    dynamicPanel.setToolTipText(tooltip);
+                    dynamicPanel.revalidate();
+                    dynamicPanel.repaint();
+                });
+            }, dyn.intervalMs, dyn.intervalMs, TimeUnit.MILLISECONDS);
 
-                @Override
-                public void run() {
-                    SwingUtilities.invokeLater(() -> {
-                        idx = (idx + 1) % dyn.names.length;
-                        currentIdx[0] = idx;
-                        iconLabel.setIcon(new ImageIcon(dyn.icons.get(idx)));
-                        String tooltip = buildTooltipText(
-                                new MissingItem(dyn.names[idx], dyn.itemIds[idx], dyn.icons.get(idx)));
-                        iconLabel.setToolTipText(tooltip);
-                        dynamicPanel.setToolTipText(tooltip);
-                        dynamicPanel.revalidate();
-                        dynamicPanel.repaint();
-                    });
-                }
-            }, dyn.intervalMs, dyn.intervalMs);
-
-            // Track timer for cleanup when panel is rebuilt or cleared
-            activeTimers.add(timer);
+            // Track future for cleanup when panel is rebuilt or cleared
+            scheduledFutures.add(future);
 
             MouseAdapter hoverAndClick = new MouseAdapter() {
                 @Override
