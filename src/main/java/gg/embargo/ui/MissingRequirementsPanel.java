@@ -21,7 +21,10 @@ import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.util.*;
 import java.util.List;
-import java.util.Timer;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class MissingRequirementsPanel extends PluginPanel {
@@ -32,27 +35,30 @@ public class MissingRequirementsPanel extends PluginPanel {
     private static final Color HOVER_COLOR = ColorScheme.DARKER_GRAY_HOVER_COLOR;
     private static final Color NORMAL_COLOR = ColorScheme.DARKER_GRAY_COLOR;
 
-    // Cache for item icons to avoid recreating them - limited size with LRU eviction
+    // Cache for item icons to avoid recreating them - bounded LRU cache to prevent memory bloat
     private static final int MAX_ICON_CACHE_SIZE = 100;
     private static final int MAX_LETTER_ICON_CACHE_SIZE = 50;
-    private final Map<Integer, BufferedImage> iconCache = new LinkedHashMap<Integer, BufferedImage>(MAX_ICON_CACHE_SIZE, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<Integer, BufferedImage> eldest) {
-            return size() > MAX_ICON_CACHE_SIZE;
-        }
-    };
-    private final Map<String, BufferedImage> letterIconCache = new LinkedHashMap<String, BufferedImage>(MAX_LETTER_ICON_CACHE_SIZE, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, BufferedImage> eldest) {
-            return size() > MAX_LETTER_ICON_CACHE_SIZE;
-        }
-    };
+    private final Map<Integer, BufferedImage> iconCache = Collections.synchronizedMap(
+            new LinkedHashMap<Integer, BufferedImage>(MAX_ICON_CACHE_SIZE, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<Integer, BufferedImage> eldest) {
+                    return size() > MAX_ICON_CACHE_SIZE;
+                }
+            });
+    private final Map<String, BufferedImage> letterIconCache = Collections.synchronizedMap(
+            new LinkedHashMap<String, BufferedImage>(MAX_LETTER_ICON_CACHE_SIZE, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, BufferedImage> eldest) {
+                    return size() > MAX_LETTER_ICON_CACHE_SIZE;
+                }
+            });
     private volatile boolean isUpdating = false;
 
-    // Track active timers for cleanup
-    private final List<Timer> activeTimers = new ArrayList<>();
+    // Track scheduled futures for cleanup to prevent memory leaks
+    private final List<ScheduledFuture<?>> scheduledFutures = Collections.synchronizedList(new ArrayList<>());
 
     private final ItemManager itemManager;
+    private final ScheduledExecutorService executorService;
     private final JPanel itemsContainer;
     private final List<MissingItem> missingItems = new ArrayList<>();
     private final MouseAdapter itemMouseAdapter = createMouseAdapter();
@@ -82,9 +88,10 @@ public class MissingRequirementsPanel extends PluginPanel {
     }
 
     @Inject
-    public MissingRequirementsPanel(ItemManager itemManager) {
+    public MissingRequirementsPanel(ItemManager itemManager, ScheduledExecutorService executorService) {
         super(false);
         this.itemManager = itemManager;
+        this.executorService = executorService;
 
         setLayout(new BorderLayout());
         setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -307,9 +314,7 @@ public class MissingRequirementsPanel extends PluginPanel {
      */
     public void clearItems() {
         synchronized (lock) {
-            // Cancel all active timers to prevent memory leaks
-            cancelAllTimers();
-
+            cancelAllScheduledFutures();
             if (!missingItems.isEmpty()) {
                 missingItems.clear();
                 updatePanel();
@@ -318,31 +323,28 @@ public class MissingRequirementsPanel extends PluginPanel {
     }
 
     /**
-     * Cancels all active timers used by dynamic items
+     * Cancels all scheduled futures to prevent memory leaks.
+     * Must be called before recreating panels or during cleanup.
      */
-    private void cancelAllTimers() {
-        synchronized (activeTimers) {
-            for (Timer timer : activeTimers) {
-                timer.cancel();
+    private void cancelAllScheduledFutures() {
+        synchronized (scheduledFutures) {
+            for (ScheduledFuture<?> future : scheduledFutures) {
+                future.cancel(true);
             }
-            activeTimers.clear();
+            scheduledFutures.clear();
         }
     }
 
     /**
-     * Cleanup method to be called when the panel is being destroyed.
-     * Cancels all timers and clears caches to prevent memory leaks.
+     * Cleanup method to be called when the plugin is shutting down.
+     * Cancels all scheduled futures and clears caches to prevent memory leaks.
      */
     public void shutdown() {
         synchronized (lock) {
-            cancelAllTimers();
+            cancelAllScheduledFutures();
             missingItems.clear();
-            synchronized (iconCache) {
-                iconCache.clear();
-            }
-            synchronized (letterIconCache) {
-                letterIconCache.clear();
-            }
+            iconCache.clear();
+            letterIconCache.clear();
             itemsContainer.removeAll();
         }
     }
@@ -351,7 +353,6 @@ public class MissingRequirementsPanel extends PluginPanel {
      * Updates the panel with the current list of missing items
      */
     private void updatePanel() {
-
         if (isUpdating) {
             return; // Prevent concurrent updates
         }
@@ -360,6 +361,8 @@ public class MissingRequirementsPanel extends PluginPanel {
             isUpdating = true;
             SwingUtilities.invokeLater(() -> {
                 synchronized (lock) {
+                    // Cancel existing scheduled futures before rebuilding panels to prevent leaks
+                    cancelAllScheduledFutures();
                     itemsContainer.removeAll();
                     for (MissingItem item : missingItems) {
                         JPanel itemPanel = createItemPanel(item);
@@ -394,27 +397,23 @@ public class MissingRequirementsPanel extends PluginPanel {
             dynamicPanel.add(iconLabel, BorderLayout.CENTER);
 
             // Track the current index for click events
-            final int[] currentIdx = { 0 };
+            final AtomicInteger currentIdx = new AtomicInteger(0);
 
-            Timer timer = new Timer(true); // daemon thread so it doesn't prevent JVM shutdown
-            timer.scheduleAtFixedRate(new TimerTask() {
-                int idx = 0;
+            ScheduledFuture<?> future = executorService.scheduleAtFixedRate(() -> {
+                SwingUtilities.invokeLater(() -> {
+                    int idx = currentIdx.updateAndGet(i -> (i + 1) % dyn.names.length);
+                    iconLabel.setIcon(new ImageIcon(dyn.icons.get(idx)));
+                    String tooltip = buildTooltipText(
+                            new MissingItem(dyn.names[idx], dyn.itemIds[idx], dyn.icons.get(idx)));
+                    iconLabel.setToolTipText(tooltip);
+                    dynamicPanel.setToolTipText(tooltip);
+                    dynamicPanel.revalidate();
+                    dynamicPanel.repaint();
+                });
+            }, dyn.intervalMs, dyn.intervalMs, TimeUnit.MILLISECONDS);
 
-                @Override
-                public void run() {
-                    SwingUtilities.invokeLater(() -> {
-                        idx = (idx + 1) % dyn.names.length;
-                        currentIdx[0] = idx;
-                        iconLabel.setIcon(new ImageIcon(dyn.icons.get(idx)));
-                        String tooltip = buildTooltipText(
-                                new MissingItem(dyn.names[idx], dyn.itemIds[idx], dyn.icons.get(idx)));
-                        iconLabel.setToolTipText(tooltip);
-                        dynamicPanel.setToolTipText(tooltip);
-                        dynamicPanel.revalidate();
-                        dynamicPanel.repaint();
-                    });
-                }
-            }, dyn.intervalMs, dyn.intervalMs);
+            // Track future for cleanup when panel is rebuilt or cleared
+            scheduledFutures.add(future);
 
             // Track timer for cleanup
             synchronized (activeTimers) {
@@ -436,7 +435,7 @@ public class MissingRequirementsPanel extends PluginPanel {
 
                 @Override
                 public void mouseClicked(MouseEvent e) {
-                    int idx = currentIdx[0];
+                    int idx = currentIdx.get();
                     int itemId = dyn.itemIds[idx];
                     String itemName = dyn.names[idx];
                     if (itemId == -1) {

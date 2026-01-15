@@ -392,6 +392,7 @@ public class EmbargoPanel extends PluginPanel {
 
     public void reset() {
         eventBus.unregister(this);
+        missingRequirementsPanelX.shutdown();
         this.updateLoggedIn(false);
     }
 
