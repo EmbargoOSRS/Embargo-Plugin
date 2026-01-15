@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class MissingRequirementsPanel extends PluginPanel {
@@ -396,13 +397,11 @@ public class MissingRequirementsPanel extends PluginPanel {
             dynamicPanel.add(iconLabel, BorderLayout.CENTER);
 
             // Track the current index for click events
-            final int[] currentIdx = { 0 };
+            final AtomicInteger currentIdx = new AtomicInteger(0);
 
-            // Use ScheduledExecutorService for icon rotation (RuneLite best practice)
             ScheduledFuture<?> future = executorService.scheduleAtFixedRate(() -> {
                 SwingUtilities.invokeLater(() -> {
-                    int idx = (currentIdx[0] + 1) % dyn.names.length;
-                    currentIdx[0] = idx;
+                    int idx = currentIdx.updateAndGet(i -> (i + 1) % dyn.names.length);
                     iconLabel.setIcon(new ImageIcon(dyn.icons.get(idx)));
                     String tooltip = buildTooltipText(
                             new MissingItem(dyn.names[idx], dyn.itemIds[idx], dyn.icons.get(idx)));
@@ -431,7 +430,7 @@ public class MissingRequirementsPanel extends PluginPanel {
 
                 @Override
                 public void mouseClicked(MouseEvent e) {
-                    int idx = currentIdx[0];
+                    int idx = currentIdx.get();
                     int itemId = dyn.itemIds[idx];
                     String itemName = dyn.names[idx];
                     if (itemId == -1) {
