@@ -40,7 +40,14 @@ public class UntrackableItemManager {
 
     private static final String UNTRACKABLE_ENDPOINT = "https://embargo.gg/api/untrackables";
 
-    private final HashMap<String, LocalDateTime> lastLootTime = new HashMap<>();
+    // Limit size to prevent unbounded growth - LRU eviction for player loot timestamps
+    private static final int MAX_LOOT_TIME_CACHE_SIZE = 50;
+    private final Map<String, LocalDateTime> lastLootTime = new LinkedHashMap<String, LocalDateTime>(MAX_LOOT_TIME_CACHE_SIZE, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, LocalDateTime> eldest) {
+            return size() > MAX_LOOT_TIME_CACHE_SIZE;
+        }
+    };
 
     @Getter
     enum UntrackableItems {
@@ -142,7 +149,11 @@ public class UntrackableItemManager {
     public void startUp() {
         eventBus.register(this);
     }
-    public void shutDown() { eventBus.unregister(this);}
+
+    public void shutDown() {
+        eventBus.unregister(this);
+        lastLootTime.clear();
+    }
 
     @Subscribe
     public void onScriptPostFired(ScriptPostFired event) {

@@ -415,6 +415,11 @@ public class MissingRequirementsPanel extends PluginPanel {
             // Track future for cleanup when panel is rebuilt or cleared
             scheduledFutures.add(future);
 
+            // Track timer for cleanup
+            synchronized (activeTimers) {
+                activeTimers.add(timer);
+            }
+
             MouseAdapter hoverAndClick = new MouseAdapter() {
                 @Override
                 public void mouseEntered(MouseEvent e) {
