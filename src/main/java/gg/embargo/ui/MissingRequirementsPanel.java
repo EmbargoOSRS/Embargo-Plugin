@@ -22,7 +22,6 @@ import java.awt.image.BufferedImage;
 import java.util.*;
 import java.util.List;
 import java.util.Timer;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 public class MissingRequirementsPanel extends PluginPanel {
@@ -33,10 +32,27 @@ public class MissingRequirementsPanel extends PluginPanel {
     private static final Color HOVER_COLOR = ColorScheme.DARKER_GRAY_HOVER_COLOR;
     private static final Color NORMAL_COLOR = ColorScheme.DARKER_GRAY_COLOR;
 
-    // Cache for item icons to avoid recreating them
-    private final Map<Integer, BufferedImage> iconCache = new ConcurrentHashMap<>();
-    private final Map<String, BufferedImage> letterIconCache = new ConcurrentHashMap<>();
+    // Cache for item icons to avoid recreating them - bounded LRU cache to prevent memory bloat
+    private static final int MAX_ICON_CACHE_SIZE = 100;
+    private static final int MAX_LETTER_ICON_CACHE_SIZE = 50;
+    private final Map<Integer, BufferedImage> iconCache = Collections.synchronizedMap(
+            new LinkedHashMap<Integer, BufferedImage>(MAX_ICON_CACHE_SIZE, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<Integer, BufferedImage> eldest) {
+                    return size() > MAX_ICON_CACHE_SIZE;
+                }
+            });
+    private final Map<String, BufferedImage> letterIconCache = Collections.synchronizedMap(
+            new LinkedHashMap<String, BufferedImage>(MAX_LETTER_ICON_CACHE_SIZE, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, BufferedImage> eldest) {
+                    return size() > MAX_LETTER_ICON_CACHE_SIZE;
+                }
+            });
     private volatile boolean isUpdating = false;
+
+    // Track active timers for cleanup to prevent memory leaks
+    private final List<Timer> activeTimers = Collections.synchronizedList(new ArrayList<>());
 
     private final ItemManager itemManager;
     private final JPanel itemsContainer;
@@ -293,7 +309,7 @@ public class MissingRequirementsPanel extends PluginPanel {
      */
     public void clearItems() {
         synchronized (lock) {
-
+            cancelAllTimers();
             if (!missingItems.isEmpty()) {
                 missingItems.clear();
                 updatePanel();
@@ -302,10 +318,36 @@ public class MissingRequirementsPanel extends PluginPanel {
     }
 
     /**
+     * Cancels all active timers to prevent memory leaks.
+     * Must be called before recreating panels or during cleanup.
+     */
+    private void cancelAllTimers() {
+        synchronized (activeTimers) {
+            for (Timer timer : activeTimers) {
+                timer.cancel();
+            }
+            activeTimers.clear();
+        }
+    }
+
+    /**
+     * Cleanup method to be called when the plugin is shutting down.
+     * Cancels all timers and clears caches to prevent memory leaks.
+     */
+    public void shutdown() {
+        synchronized (lock) {
+            cancelAllTimers();
+            missingItems.clear();
+            iconCache.clear();
+            letterIconCache.clear();
+            itemsContainer.removeAll();
+        }
+    }
+
+    /**
      * Updates the panel with the current list of missing items
      */
     private void updatePanel() {
-
         if (isUpdating) {
             return; // Prevent concurrent updates
         }
@@ -314,6 +356,8 @@ public class MissingRequirementsPanel extends PluginPanel {
             isUpdating = true;
             SwingUtilities.invokeLater(() -> {
                 synchronized (lock) {
+                    // Cancel existing timers before rebuilding panels to prevent leaks
+                    cancelAllTimers();
                     itemsContainer.removeAll();
                     for (MissingItem item : missingItems) {
                         JPanel itemPanel = createItemPanel(item);
@@ -350,7 +394,8 @@ public class MissingRequirementsPanel extends PluginPanel {
             // Track the current index for click events
             final int[] currentIdx = { 0 };
 
-            Timer timer = new Timer();
+            // Use daemon timer so it doesn't prevent JVM shutdown
+            Timer timer = new Timer(true);
             timer.scheduleAtFixedRate(new TimerTask() {
                 int idx = 0;
 
@@ -369,6 +414,9 @@ public class MissingRequirementsPanel extends PluginPanel {
                     });
                 }
             }, dyn.intervalMs, dyn.intervalMs);
+
+            // Track timer for cleanup when panel is rebuilt or cleared
+            activeTimers.add(timer);
 
             MouseAdapter hoverAndClick = new MouseAdapter() {
                 @Override
