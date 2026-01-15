@@ -134,7 +134,7 @@ public class EmbargoPanel extends PluginPanel {
         actionsContainer.setBorder(new EmptyBorder(10, 0, 0, 0));
         actionsContainer.setLayout(new GridLayout(0, 1, 0, 10));
 
-        actionsContainer.add(buildLinkPanel(DISCORD_ICON, "Join us on our", "Discord", "https://discord.gg/embargo"));
+        actionsContainer.add(buildLinkPanel(DISCORD_ICON, "Join us on our", "Discord", "https://discord.gg/YDGGyP3VEq"));
         actionsContainer.add(buildLinkPanel(WEBSITE_ICON, "Go to our", "clan website", "https://embargo.gg/"));
         actionsContainer.add(buildLinkPanel(GITHUB_ICON, "Report a bug or", "inspect the plugin code",
                 "https://github.com/Sharpienero/Embargo-Plugin"));
