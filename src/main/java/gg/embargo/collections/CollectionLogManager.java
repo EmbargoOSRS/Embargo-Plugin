@@ -64,7 +64,8 @@ public class CollectionLogManager {
 
     // Limit playerDataMap size to prevent unbounded growth - LRU eviction
     private static final int MAX_PLAYER_DATA_CACHE_SIZE = 10;
-    private final Map<PlayerProfile, PlayerData> playerDataMap = new LinkedHashMap<PlayerProfile, PlayerData>(MAX_PLAYER_DATA_CACHE_SIZE, 0.75f, true) {
+    private final Map<PlayerProfile, PlayerData> playerDataMap = new LinkedHashMap<PlayerProfile, PlayerData>(
+            MAX_PLAYER_DATA_CACHE_SIZE, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<PlayerProfile, PlayerData> eldest) {
             return size() > MAX_PLAYER_DATA_CACHE_SIZE;
@@ -267,6 +268,8 @@ public class CollectionLogManager {
             @Override
             public void onFailure(Call call, IOException e) {
                 log.debug("Failed to submit: ", e);
+                clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.CONSOLE, "Embargo",
+                        "Failed to upload data to Embargo.", "Embargo"));
             }
 
             @Override
@@ -274,10 +277,14 @@ public class CollectionLogManager {
                 try (response) {
                     if (!response.isSuccessful()) {
                         log.debug("Failed to submit: {}", response.code());
+                        clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.CONSOLE, "Embargo",
+                                "Failed to upload data to Embargo.", "Embargo"));
                         return;
                     }
                     merge(old, delta);
                     cyclesSinceSuccessfulCall = 0;
+                    clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.CONSOLE, "Embargo",
+                            "Done uploading data to Embargo.", "Embargo"));
                 } finally {
                     response.close();
                 }

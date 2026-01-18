@@ -41,7 +41,8 @@ public class NPCRenameManager {
             MenuAction.WIDGET_TARGET_ON_NPC,
             MenuAction.EXAMINE_NPC);
 
-    private static final ImmutableMap<String, String> DEFAULT_NPC_RENAMES = ImmutableMap.<String, String>builder().build();
+    private static final ImmutableMap<String, String> DEFAULT_NPC_RENAMES = ImmutableMap.<String, String>builder()
+            .build();
     private final Map<String, String> customNPCRemaps = new HashMap<>();
 
     private boolean manifestFetchAttempted = false;
@@ -70,16 +71,17 @@ public class NPCRenameManager {
         parseManifest();
         MenuEntry entry = event.getMenuEntry();
 
-
         if (NPC_MENU_ACTIONS.contains(entry.getType())) {
-            remapMenuEntryText(entry, (HashMap<String, String>) customNPCRemaps);  // Use customNPCRemaps instead of npcListHashMap
+            remapMenuEntryText(entry, (HashMap<String, String>) customNPCRemaps); // Use customNPCRemaps instead of
+                                                                                  // npcListHashMap
         }
     }
 
     public void startUp() {
         eventBus.register(this);
 
-        if (!featureEnabled()) return;
+        if (!featureEnabled())
+            return;
 
         setupMenuRenames();
         manifestManager.getLatestManifest(); // Fetch manifest on startup
@@ -96,7 +98,8 @@ public class NPCRenameManager {
     }
 
     public void parseManifest() {
-        if (manifestManager.getManifest().getNpcRenames() == null || manifestManager.getManifest().getNpcRenames().isEmpty()) {
+        if (manifestManager.getManifest().getNpcRenames() == null
+                || manifestManager.getManifest().getNpcRenames().isEmpty()) {
             if (!manifestFetchAttempted) {
                 manifestFetchAttempted = true;
                 manifestManager.getLatestManifest();
@@ -120,15 +123,13 @@ public class NPCRenameManager {
     private void remapMenuEntryText(MenuEntry menuEntry, HashMap<String, String> map) {
         String target = menuEntry.getTarget();
         String cleanTarget;
-        
+
         NPC npc = menuEntry.getNpc();
         cleanTarget = npc != null ? Text.removeTags(npc.getName()) : Text.removeTags(target);
-        
+
         String replacement = customNPCRemaps.get(cleanTarget);
         if (replacement != null) {
             menuEntry.setTarget(target.replace(cleanTarget, replacement));
         }
     }
 }
-
-

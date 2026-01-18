@@ -105,38 +105,30 @@ public class MissingRequirementsPanel extends PluginPanel {
 
         setLayout(new BorderLayout());
         setBackground(ColorScheme.DARK_GRAY_COLOR);
-        setBorder(new EmptyBorder(10, 10, 10, 10));
+        setBorder(new EmptyBorder(5, 0, 5, 0));
 
-        // Create title panel
-        add(createTitlePanel(), BorderLayout.NORTH);
+        // Create subtitle panel with instructions
+        JPanel subtitlePanel = new JPanel(new BorderLayout());
+        subtitlePanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        subtitlePanel.setBorder(new EmptyBorder(0, 0, 8, 0));
 
-        // Create items container
+        JLabel subtitle = new JLabel("Hover for details, click to open wiki");
+        subtitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        subtitle.setFont(new Font("SansSerif", Font.BOLD, 10));
+        subtitlePanel.add(subtitle, BorderLayout.WEST);
+
+        add(subtitlePanel, BorderLayout.NORTH);
+
+        // Create items container with increased gap for better spacing
         itemsContainer = new JPanel();
-        itemsContainer.setLayout(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
+        itemsContainer.setLayout(new GridLayout(0, ITEMS_PER_ROW, 4, 4));
         itemsContainer.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
         JScrollPane scrollPane = new JScrollPane(itemsContainer);
         scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
         scrollPane.setBorder(null);
+        scrollPane.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
         add(scrollPane, BorderLayout.CENTER);
-    }
-
-    private JPanel createTitlePanel() {
-        JPanel titlePanel = new JPanel(new BorderLayout());
-        titlePanel.setBorder(new EmptyBorder(0, 0, 10, 0));
-        titlePanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
-
-        JLabel title = new JLabel("Missing Requirements");
-        title.setForeground(Color.WHITE);
-        title.setFont(new Font("SansSerif", Font.BOLD, 16));
-        titlePanel.add(title, BorderLayout.NORTH);
-
-        JLabel subtitle = new JLabel("Hover for details, click to open wiki");
-        subtitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        subtitle.setFont(new Font("SansSerif", Font.ITALIC, 10));
-        titlePanel.add(subtitle, BorderLayout.SOUTH);
-
-        return titlePanel;
     }
 
     /**

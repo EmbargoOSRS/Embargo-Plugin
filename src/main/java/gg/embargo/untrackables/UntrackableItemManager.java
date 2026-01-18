@@ -19,7 +19,6 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
-
 @Slf4j
 @Singleton
 public class UntrackableItemManager {
@@ -40,9 +39,11 @@ public class UntrackableItemManager {
 
     private static final String UNTRACKABLE_ENDPOINT = "https://embargo.gg/api/untrackables";
 
-    // Limit size to prevent unbounded growth - LRU eviction for player loot timestamps
+    // Limit size to prevent unbounded growth - LRU eviction for player loot
+    // timestamps
     private static final int MAX_LOOT_TIME_CACHE_SIZE = 50;
-    private final Map<String, LocalDateTime> lastLootTime = new LinkedHashMap<String, LocalDateTime>(MAX_LOOT_TIME_CACHE_SIZE, 0.75f, true) {
+    private final Map<String, LocalDateTime> lastLootTime = new LinkedHashMap<String, LocalDateTime>(
+            MAX_LOOT_TIME_CACHE_SIZE, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, LocalDateTime> eldest) {
             return size() > MAX_LOOT_TIME_CACHE_SIZE;
@@ -66,7 +67,7 @@ public class UntrackableItemManager {
         IMBUED_ZAMORAK_MAX_CAPE_I(24233),
         IMBUED_GUTHIX_MAX_CAPE_I(24234),
 
-        //BINGO #1 ITEMS FOR START COUNTS
+        // BINGO #1 ITEMS FOR START COUNTS
         BEGINNER_REWARD_CASKET(23245),
         EASY_REWARD_CASKET(20546),
         MEDIUM_REWARD_CASKET(20545),
@@ -76,7 +77,6 @@ public class UntrackableItemManager {
 
         MOSSY_KEY(22374),
         GIANT_KEY(20754);
-
 
         private final int itemId;
 
@@ -96,8 +96,10 @@ public class UntrackableItemManager {
         }
         if (itemContainer != null && children != null) {
 
-            //Convert itemMap to use manifest.untrackableItems (which is a list of integers) instead of hardcoded enum
-            var itemMap = Arrays.stream(UntrackableItems.values()).map(UntrackableItems::getItemId).collect(Collectors.toCollection(HashSet::new));
+            // Convert itemMap to use manifest.untrackableItems (which is a list of
+            // integers) instead of hardcoded enum
+            var itemMap = Arrays.stream(UntrackableItems.values()).map(UntrackableItems::getItemId)
+                    .collect(Collectors.toCollection(HashSet::new));
             List<Integer> playerItems = new ArrayList<>();
             java.util.Map<Integer, Integer> itemQuantities = new java.util.HashMap<>();
             for (int i = 0; i < itemContainer.size(); ++i) {
@@ -112,7 +114,7 @@ public class UntrackableItemManager {
             }
 
             var RequestBody = new FormBody.Builder();
-            for (int i=0; i < playerItems.size(); i++) {
+            for (int i = 0; i < playerItems.size(); i++) {
                 RequestBody.add("itemIds[" + i + "]", String.valueOf(playerItems.get(i)));
                 RequestBody.add("quantities[" + i + "]", String.valueOf(itemQuantities.get(playerItems.get(i))));
             }
