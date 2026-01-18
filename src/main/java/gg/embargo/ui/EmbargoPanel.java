@@ -26,6 +26,7 @@ import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
+import java.util.concurrent.ScheduledExecutorService;
 
 @Slf4j
 public class EmbargoPanel extends PluginPanel {
@@ -43,6 +44,9 @@ public class EmbargoPanel extends PluginPanel {
 
     @Inject
     private ClientThread clientThread;
+
+    @Inject
+    private ScheduledExecutorService executorService;
 
     @Setter
     public boolean isLoggedIn = false;
@@ -272,44 +276,79 @@ public class EmbargoPanel extends PluginPanel {
 
                         // Build out the missing requirements panel
                         if (missingGearReqs.size() > 0 || missingUntradableItemIdReqs.size() > 0) {
-                            for (JsonElement mi : missingGearReqs) {
-                                String itemName = mi.getAsString();
-                                alreadyProcessed.add(itemName);
-                                log.debug("Processing {} in missingGearReqs", itemName);
+                            // Process items off the client thread to avoid blocking chunk loading
+                            // Use executorService to perform all item ID lookups asynchronously
+                            executorService.execute(() -> {
+                                // Pre-resolve all item IDs off the client thread (these are blocking calls)
+                                java.util.List<Object[]> dynamicItemsData = new ArrayList<>();
+                                java.util.List<Object[]> regularItemsData = new ArrayList<>();
 
-                                if (itemName.contains("|")) {
-                                    // DynamicMissingItem: rotate between items every 3 seconds
-                                    String[] dynamicNames = itemName.split("\\|");
-                                    int[] itemIds = new int[dynamicNames.length];
-                                    for (int i = 0; i < dynamicNames.length; i++) {
-                                        itemIds[i] = missingRequirementsPanelX.findItemIdByName(dynamicNames[i].trim());
+                                for (JsonElement mi : missingGearReqs) {
+                                    String itemName = mi.getAsString();
+                                    alreadyProcessed.add(itemName);
+                                    log.debug("Processing {} in missingGearReqs", itemName);
+
+                                    if (itemName.contains("|")) {
+                                        // DynamicMissingItem: pre-resolve all item IDs
+                                        String[] dynamicNames = itemName.split("\\|");
+                                        int[] itemIds = new int[dynamicNames.length];
+                                        for (int i = 0; i < dynamicNames.length; i++) {
+                                            itemIds[i] = missingRequirementsPanelX.findItemIdByName(dynamicNames[i].trim());
+                                        }
+                                        dynamicItemsData.add(new Object[]{dynamicNames, itemIds});
+                                    } else {
+                                        // Regular item: pre-resolve item ID
+                                        int itemId = missingRequirementsPanelX.findItemIdByName(itemName);
+                                        regularItemsData.add(new Object[]{itemName, itemId});
                                     }
-                                    clientThread.invokeLater(() -> missingRequirementsPanelX
-                                            .addDynamicMissingItem(dynamicNames, itemIds, 3000));
-                                } else {
-                                    clientThread.invokeLater(() -> missingRequirementsPanelX.addMissingItem(itemName,
-                                            missingRequirementsPanelX.findItemIdByName(itemName)));
                                 }
-                            }
 
-                            for (JsonElement mu : missingUntradableItemIdReqs) {
-                                if (alreadyProcessed.contains(mu.getAsString())) {
-                                    log.debug("{} already added, skipping missingUntradableItemIdReqs",
-                                            mu.getAsString());
-                                    continue;
+                                java.util.List<Integer> untradableIds = new ArrayList<>();
+                                for (JsonElement mu : missingUntradableItemIdReqs) {
+                                    if (alreadyProcessed.contains(mu.getAsString())) {
+                                        log.debug("{} already added, skipping missingUntradableItemIdReqs",
+                                                mu.getAsString());
+                                        continue;
+                                    }
+                                    untradableIds.add(mu.getAsInt());
                                 }
-                                missingRequirementsPanelX.addMissingItem("", mu.getAsInt());
-                            }
 
-                            // Clear the panel first
-                            missingRequirementsPanel.removeAll();
+                                // Now add all items on the client thread with batching enabled
+                                clientThread.invokeLater(() -> {
+                                    // Begin batching to prevent multiple panel rebuilds
+                                    missingRequirementsPanelX.beginBatchUpdate();
 
-                            // Add only the missingRequirementsPanelX (not the label)
-                            missingRequirementsPanel.add(missingRequirementsPanelX);
+                                    try {
+                                        // Add all dynamic items
+                                        for (Object[] data : dynamicItemsData) {
+                                            String[] names = (String[]) data[0];
+                                            int[] ids = (int[]) data[1];
+                                            missingRequirementsPanelX.addDynamicMissingItem(names, ids, 3000);
+                                        }
 
-                            // Refresh the panel
-                            missingRequirementsPanel.revalidate();
-                            missingRequirementsPanel.repaint();
+                                        // Add all regular items
+                                        for (Object[] data : regularItemsData) {
+                                            String name = (String) data[0];
+                                            int id = (int) data[1];
+                                            missingRequirementsPanelX.addMissingItem(name, id);
+                                        }
+
+                                        // Add untradable items
+                                        for (int itemId : untradableIds) {
+                                            missingRequirementsPanelX.addMissingItem("", itemId);
+                                        }
+                                    } finally {
+                                        // End batching - this triggers a single panel rebuild
+                                        missingRequirementsPanelX.endBatchUpdate();
+                                    }
+
+                                    // Update the container panel
+                                    missingRequirementsPanel.removeAll();
+                                    missingRequirementsPanel.add(missingRequirementsPanelX);
+                                    missingRequirementsPanel.revalidate();
+                                    missingRequirementsPanel.repaint();
+                                });
+                            });
                         } else {
                             missingRequiredItemsLabel.setText(htmlLabel("Missing Requirements: ", "None"));
                         }
