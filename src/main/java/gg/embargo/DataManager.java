@@ -166,7 +166,15 @@ public class DataManager {
     }
 
     public List<Player> getSurroundingPlayers() {
-        return client.getPlayers();
+        WorldView worldView = client.getTopLevelWorldView();
+        if (worldView == null) {
+            return Collections.emptyList();
+        }
+        List<Player> players = new ArrayList<>();
+        for (Player player : worldView.players()) {
+            players.add(player);
+        }
+        return players;
     }
 
     public boolean shouldTrackLoot(String bossName) {

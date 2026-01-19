@@ -415,12 +415,7 @@ public class MissingRequirementsPanel extends PluginPanel {
     private JPanel createItemPanel(MissingItem item) {
         if (item instanceof DynamicMissingItem) {
             DynamicMissingItem dyn = (DynamicMissingItem) item;
-            JPanel dynamicPanel = new JPanel(new BorderLayout());
-            dynamicPanel.setBackground(NORMAL_COLOR);
-            dynamicPanel.setBorder(new LineBorder(Color.BLACK, 1));
-            dynamicPanel.setPreferredSize(new Dimension(CELL_SIZE, CELL_SIZE));
-            dynamicPanel.setMinimumSize(new Dimension(CELL_SIZE, CELL_SIZE));
-            dynamicPanel.setMaximumSize(new Dimension(CELL_SIZE, CELL_SIZE));
+            JPanel dynamicPanel = createBaseItemPanel();
 
             JLabel iconLabel = new JLabel();
             iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
@@ -480,12 +475,7 @@ public class MissingRequirementsPanel extends PluginPanel {
             return dynamicPanel;
         }
 
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.setBackground(NORMAL_COLOR);
-        panel.setBorder(new LineBorder(Color.BLACK, 1));
-        panel.setPreferredSize(new Dimension(CELL_SIZE, CELL_SIZE));
-        panel.setMinimumSize(new Dimension(CELL_SIZE, CELL_SIZE));
-        panel.setMaximumSize(new Dimension(CELL_SIZE, CELL_SIZE));
+        JPanel panel = createBaseItemPanel();
 
         JLabel iconLabel = new JLabel(new ImageIcon(item.getIcon()));
         iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
@@ -495,6 +485,16 @@ public class MissingRequirementsPanel extends PluginPanel {
         // Add hover effect and click handler to the panel
         panel.addMouseListener(itemMouseAdapter);
 
+        return panel;
+    }
+
+    private JPanel createBaseItemPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBackground(NORMAL_COLOR);
+        panel.setBorder(new LineBorder(Color.BLACK, 1));
+        panel.setPreferredSize(new Dimension(CELL_SIZE, CELL_SIZE));
+        panel.setMinimumSize(new Dimension(CELL_SIZE, CELL_SIZE));
+        panel.setMaximumSize(new Dimension(CELL_SIZE, CELL_SIZE));
         return panel;
     }
 

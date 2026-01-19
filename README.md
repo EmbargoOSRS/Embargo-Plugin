@@ -36,13 +36,16 @@ Config settings:
 ![Config settings](resources/highlight-settings.png)
 
 TOB:
+
 ![TOB Image](resources/tob-highlight.png)
 ![TOB Image2](resources/tob-highlight2.png)
 
 TOA:
+
 ![TOA Image](resources/toa-highlight.png)
 ![TOA Image2](resources/toa-highlight2.png)
 
 Collection Log:
+
 ![Collection Log Image](resources/collection-log-panel.png)
 
