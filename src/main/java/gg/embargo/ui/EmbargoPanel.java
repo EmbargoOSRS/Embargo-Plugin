@@ -35,6 +35,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class EmbargoPanel extends PluginPanel {
@@ -112,6 +114,10 @@ public class EmbargoPanel extends PluginPanel {
 
     // Of The Week event alerts
     private final Set<Integer> alertedEventIds = new HashSet<>();
+
+    // Periodic refresh for events/bounties/polls
+    private static final int EVENTS_REFRESH_INTERVAL_MINUTES = 1;
+    private ScheduledFuture<?> eventsRefreshTask;
 
     @Inject
     private EmbargoPanel() {
@@ -718,6 +724,34 @@ public class EmbargoPanel extends PluginPanel {
     }
 
     /**
+     * Starts the periodic background refresh for events, bounties, and polls.
+     * Runs every minute while the user is logged in.
+     */
+    private void startPeriodicEventsRefresh() {
+        // Cancel any existing task first
+        stopPeriodicEventsRefresh();
+
+        eventsRefreshTask = executorService.scheduleAtFixedRate(() -> {
+            if (isLoggedIn) {
+                log.debug("Periodic refresh: fetching events, bounties, and polls");
+                fetchAndUpdateEvents();
+                fetchAndUpdateBounties();
+                fetchAndUpdatePoll();
+            }
+        }, EVENTS_REFRESH_INTERVAL_MINUTES, EVENTS_REFRESH_INTERVAL_MINUTES, TimeUnit.MINUTES);
+    }
+
+    /**
+     * Stops the periodic background refresh for events, bounties, and polls.
+     */
+    private void stopPeriodicEventsRefresh() {
+        if (eventsRefreshTask != null && !eventsRefreshTask.isCancelled()) {
+            eventsRefreshTask.cancel(false);
+            eventsRefreshTask = null;
+        }
+    }
+
+    /**
      * Fetches the last active poll from API and updates the panel
      */
     private void fetchAndUpdatePoll() {
@@ -828,7 +862,7 @@ public class EmbargoPanel extends PluginPanel {
             client.addChatMessage(
                     net.runelite.api.ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> New event: <col=ffffff>" + displayName + "</col>! Check the side panel for details.",
+                    "<col=ff9000>[Embargo]</col> Active OTW event: <col=ffffff>" + displayName + "</col>! Check the side panel for details.",
                     null
             );
         });
@@ -1046,6 +1080,11 @@ public class EmbargoPanel extends PluginPanel {
                     // Refresh events (Of The Week and Bounties) on login
                     fetchAndUpdateEvents();
                     fetchAndUpdateBounties();
+                    fetchAndUpdatePoll();
+
+                    // Start periodic refresh for events/bounties/polls
+                    startPeriodicEventsRefresh();
+
                     embargoScoreLabel.setText(htmlLabel("Embargo Score:", " Loading..."));
                     accountScoreLabel.setText(htmlLabel("Account Score:", " Loading..."));
                     communityScoreLabel.setText(htmlLabel("Community Score:", " Loading..."));
@@ -1200,6 +1239,9 @@ public class EmbargoPanel extends PluginPanel {
     public void logOut() {
         this.isLoggedIn = false;
 
+        // Stop periodic refresh
+        stopPeriodicEventsRefresh();
+
         // Clear alerted IDs so users get re-alerted on next login
         clearAlertedIds();
 
@@ -1258,6 +1300,7 @@ public class EmbargoPanel extends PluginPanel {
     }
 
     public void reset() {
+        stopPeriodicEventsRefresh();
         eventBus.unregister(this);
         missingRequirementsPanelX.shutdown();
         this.updateLoggedIn(false);
