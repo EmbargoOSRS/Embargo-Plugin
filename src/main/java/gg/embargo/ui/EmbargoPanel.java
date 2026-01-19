@@ -104,6 +104,7 @@ public class EmbargoPanel extends PluginPanel {
 
     // Polls subsection
     private JPanel pollsPanel;
+    private final Set<Integer> alertedPollIds = new HashSet<>();
 
     @Inject
     private EmbargoPanel() {
@@ -723,10 +724,11 @@ public class EmbargoPanel extends PluginPanel {
     }
 
     /**
-     * Clears the alerted bounty IDs (call on logout to allow re-alerting on next login)
+     * Clears the alerted bounty and poll IDs (call on logout to allow re-alerting on next login)
      */
     public void clearAlertedBounties() {
         alertedBountyIds.clear();
+        alertedPollIds.clear();
     }
 
     /**
@@ -754,6 +756,13 @@ public class EmbargoPanel extends PluginPanel {
             eventsContainer.revalidate();
             eventsContainer.repaint();
             return;
+        }
+
+        // Alert user if this is a new poll they haven't been alerted about
+        int pollId = poll.has("id") ? poll.get("id").getAsInt() : 0;
+        if (pollId > 0 && isLoggedIn && !alertedPollIds.contains(pollId)) {
+            alertedPollIds.add(pollId);
+            sendPollAlert(poll);
         }
 
         // Add spacing before poll entry
@@ -821,6 +830,26 @@ public class EmbargoPanel extends PluginPanel {
 
         eventsContainer.revalidate();
         eventsContainer.repaint();
+    }
+
+    /**
+     * Sends a chat message alert for an active poll
+     */
+    private void sendPollAlert(JsonObject poll) {
+        if (client == null || client.getGameState() != GameState.LOGGED_IN) {
+            return;
+        }
+
+        String title = poll.has("title") ? poll.get("title").getAsString() : "New Poll";
+
+        clientThread.invokeLater(() -> {
+            client.addChatMessage(
+                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    "",
+                    "<col=ff9000>[Embargo]</col> New poll: <col=ffffff>" + title + "</col>! Check the side panel or Discord to vote.",
+                    null
+            );
+        });
     }
 
     /**
