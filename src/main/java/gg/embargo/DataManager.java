@@ -347,42 +347,10 @@ public class DataManager {
     }
 
     public CompletableFuture<JsonObject> getProfileAsync(String username, boolean isMemberInfoCall) {
-        CompletableFuture<JsonObject> future = new CompletableFuture<>();
-        Request request = null;
-
-        if (isMemberInfoCall) {
-            request = new Request.Builder()
-                    .url(GET_MEMBER_INFO_ENDPOINT + '/' + username)
-                    .get()
-                    .build();
-        } else {
-            request = new Request.Builder()
-                    .url(GET_PROFILE_ENDPOINT + '/' + username)
-                    .get()
-                    .build();
-        }
-
-        okHttpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                future.complete(new JsonObject()); // Complete with empty object on failure
-            }
-
-            @Override
-            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    BufferedSource source = response.body().source();
-                    String json = source.readUtf8();
-                    response.close();
-                    future.complete(gson.fromJson(json, JsonObject.class));
-                } else {
-                    response.close();
-                    future.complete(new JsonObject()); // Complete with empty object on unsuccessful response
-                }
-            }
-        });
-
-        return future;
+        String endpoint = isMemberInfoCall
+                ? GET_MEMBER_INFO_ENDPOINT + '/' + username
+                : GET_PROFILE_ENDPOINT + '/' + username;
+        return fetchJsonAsync(endpoint, JsonObject.class, new JsonObject(), false);
     }
 
     /**
