@@ -102,6 +102,9 @@ public class EmbargoPanel extends PluginPanel {
     private JPanel bountiesListPanel;
     private final Set<Integer> alertedBountyIds = new HashSet<>();
 
+    // Polls subsection
+    private JPanel pollsPanel;
+
     @Inject
     private EmbargoPanel() {
     }
@@ -378,9 +381,31 @@ public class EmbargoPanel extends PluginPanel {
         bountiesListPanel.add(bountiesLoading);
         eventsContainer.add(bountiesListPanel);
 
-        // Fetch events and bounties
+        eventsContainer.add(Box.createVerticalStrut(8));
+
+        // === Polls Subsection ===
+        JLabel pollsHeader = new JLabel("Polls");
+        pollsHeader.setFont(new Font("SansSerif", Font.BOLD, 11));
+        pollsHeader.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        pollsHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        eventsContainer.add(pollsHeader);
+        eventsContainer.add(Box.createVerticalStrut(4));
+
+        // Polls panel
+        pollsPanel = new JPanel();
+        pollsPanel.setLayout(new BoxLayout(pollsPanel, BoxLayout.Y_AXIS));
+        pollsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        pollsPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel pollsLoading = new JLabel("Loading...");
+        pollsLoading.setFont(smallFont);
+        pollsLoading.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        pollsPanel.add(pollsLoading);
+        eventsContainer.add(pollsPanel);
+
+        // Fetch events, bounties, and polls
         fetchAndUpdateEvents();
         fetchAndUpdateBounties();
+        fetchAndUpdatePoll();
     }
 
     /**
@@ -469,6 +494,9 @@ public class EmbargoPanel extends PluginPanel {
      * Adds a single event entry to the given panel
      */
     private void addEventToPanel(JPanel panel, JsonObject event, boolean isOngoing) {
+        // Add spacing before each event entry
+        panel.add(Box.createVerticalStrut(4));
+
         String name = event.has("name") ? event.get("name").getAsString() : "Unknown";
         String metric = event.has("metric") ? event.get("metric").getAsString() : "";
         int participants = event.has("participantCount") ? event.get("participantCount").getAsInt() : 0;
@@ -620,6 +648,9 @@ public class EmbargoPanel extends PluginPanel {
      * Adds a single bounty entry to the given panel
      */
     private void addBountyToPanel(JPanel panel, JsonObject bounty, boolean isActive) {
+        // Add spacing before each bounty entry
+        panel.add(Box.createVerticalStrut(4));
+
         String name = bounty.has("name") ? bounty.get("name").getAsString() : "Unknown";
         String target = name.replaceFirst("Bounty #\\d+ - ", "");
         int bountyId = bounty.has("id") ? bounty.get("id").getAsInt() : 0;
@@ -696,6 +727,100 @@ public class EmbargoPanel extends PluginPanel {
      */
     public void clearAlertedBounties() {
         alertedBountyIds.clear();
+    }
+
+    /**
+     * Fetches the last active poll from API and updates the panel
+     */
+    private void fetchAndUpdatePoll() {
+        dataManager.getLastPollAsync().thenAccept(response -> {
+            SwingUtilities.invokeLater(() -> {
+                updatePollPanel(response);
+            });
+        });
+    }
+
+    /**
+     * Updates the poll panel with the API response
+     */
+    private void updatePollPanel(JsonObject poll) {
+        pollsPanel.removeAll();
+
+        if (poll == null) {
+            JLabel noPolls = new JLabel("No active polls");
+            noPolls.setFont(smallFont);
+            noPolls.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+            pollsPanel.add(noPolls);
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
+            return;
+        }
+
+        // Add spacing before poll entry
+        pollsPanel.add(Box.createVerticalStrut(4));
+
+        // Active label
+        JLabel activeLabel = new JLabel("Active");
+        activeLabel.setFont(smallFont);
+        activeLabel.setForeground(new Color(0x00, 0xc8, 0x00)); // Green for active
+        pollsPanel.add(activeLabel);
+
+        pollsPanel.add(Box.createVerticalStrut(4));
+
+        // Poll title as clickable link
+        String title = poll.has("title") ? poll.get("title").getAsString() : "Unknown Poll";
+        String discordUrl = poll.has("discordUrl") ? poll.get("discordUrl").getAsString() : null;
+
+        JLabel titleLabel = new JLabel(title);
+        titleLabel.setFont(smallFont);
+        titleLabel.setForeground(Color.WHITE);
+        titleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        if (discordUrl != null && !discordUrl.isEmpty()) {
+            titleLabel.setCursor(new Cursor(Cursor.HAND_CURSOR));
+            titleLabel.setToolTipText("Click to view poll on Discord");
+            final String finalDiscordUrl = discordUrl;
+            titleLabel.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    LinkBrowser.browse(finalDiscordUrl);
+                }
+            });
+        }
+        pollsPanel.add(titleLabel);
+
+        // Time remaining
+        if (poll.has("endsAt")) {
+            try {
+                String endsAtStr = poll.get("endsAt").getAsString();
+                ZonedDateTime endsAt = ZonedDateTime.parse(endsAtStr);
+                long minutesRemaining = Instant.now().until(endsAt.toInstant(), ChronoUnit.MINUTES);
+
+                String timeText;
+                if (minutesRemaining > 1440) { // More than 24 hours
+                    long days = minutesRemaining / 1440;
+                    timeText = days + "d " + ((minutesRemaining % 1440) / 60) + "h";
+                } else if (minutesRemaining > 60) {
+                    long hours = minutesRemaining / 60;
+                    timeText = hours + "h " + (minutesRemaining % 60) + "m";
+                } else if (minutesRemaining > 0) {
+                    timeText = minutesRemaining + " min";
+                } else {
+                    timeText = "Ending soon";
+                }
+
+                JLabel timeLabel = new JLabel(htmlLabel("Ends in:", " " + timeText));
+                timeLabel.setFont(smallFont);
+                timeLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+                timeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+                pollsPanel.add(timeLabel);
+            } catch (Exception e) {
+                // Skip time label if parsing fails
+            }
+        }
+
+        eventsContainer.revalidate();
+        eventsContainer.repaint();
     }
 
     /**

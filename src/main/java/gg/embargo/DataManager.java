@@ -119,7 +119,8 @@ public class DataManager {
         MINIGAME_COMPLETE("minigame"),
         GET_MEMBER_INFO("embargo-profile"),
         BOUNTIES("bounties"),
-        EVENTS("events");
+        EVENTS("events"),
+        LAST_POLL("lastpoll");
 
         APIRoutes(String route) {
             this.route = route;
@@ -148,6 +149,7 @@ public class DataManager {
     private static final String GET_MEMBER_INFO_ENDPOINT = API_URI + APIRoutes.GET_MEMBER_INFO;
     private static final String BOUNTIES_ENDPOINT = API_URI + APIRoutes.BOUNTIES;
     private static final String EVENTS_ENDPOINT = API_URI + APIRoutes.EVENTS;
+    private static final String LAST_POLL_ENDPOINT = API_URI + APIRoutes.LAST_POLL;
 
     // Boss list from API - use volatile for thread safety and instance field for proper cleanup
     private volatile List<String> bossesToTrack = null;
@@ -450,6 +452,47 @@ public class DataManager {
                 } else {
                     response.close();
                     future.complete(new JsonArray());
+                }
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Fetches the last active poll from the API asynchronously
+     *
+     * @return CompletableFuture containing the poll JSON object, or null if no active poll
+     */
+    public CompletableFuture<JsonObject> getLastPollAsync() {
+        CompletableFuture<JsonObject> future = new CompletableFuture<>();
+
+        Request request = new Request.Builder()
+                .url(LAST_POLL_ENDPOINT)
+                .get()
+                .build();
+
+        okHttpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                log.debug("Failed to fetch last poll: {}", e.getMessage());
+                future.complete(null);
+            }
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                if (response.isSuccessful()) {
+                    BufferedSource source = response.body().source();
+                    String json = source.readUtf8();
+                    response.close();
+                    if (json == null || json.equals("null") || json.isEmpty()) {
+                        future.complete(null);
+                    } else {
+                        future.complete(gson.fromJson(json, JsonObject.class));
+                    }
+                } else {
+                    response.close();
+                    future.complete(null);
                 }
             }
         });
