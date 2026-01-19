@@ -386,23 +386,29 @@ public class DataManager {
     }
 
     /**
-     * Fetches bounties from the API asynchronously
-     * 
-     * @return CompletableFuture containing the bounties JSON response
+     * Generic helper method to fetch JSON data from an API endpoint asynchronously
+     *
+     * @param endpoint     The API endpoint URL
+     * @param type         The class type to parse the response into (JsonObject.class or JsonArray.class)
+     * @param defaultValue The default value to return on failure or empty response
+     * @param allowNull    Whether to treat null/empty responses as valid (returns null instead of defaultValue)
+     * @param <T>          The type of JSON element (JsonObject or JsonArray)
+     * @return CompletableFuture containing the parsed JSON response
      */
-    public CompletableFuture<JsonObject> getBountiesAsync() {
-        CompletableFuture<JsonObject> future = new CompletableFuture<>();
+    private <T extends JsonElement> CompletableFuture<T> fetchJsonAsync(
+            String endpoint, Class<T> type, T defaultValue, boolean allowNull) {
+        CompletableFuture<T> future = new CompletableFuture<>();
 
         Request request = new Request.Builder()
-                .url(BOUNTIES_ENDPOINT)
+                .url(endpoint)
                 .get()
                 .build();
 
         okHttpClient.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                log.debug("Failed to fetch bounties: {}", e.getMessage());
-                future.complete(new JsonObject());
+                log.debug("Failed to fetch from {}: {}", endpoint, e.getMessage());
+                future.complete(allowNull ? null : defaultValue);
             }
 
             @Override
@@ -411,10 +417,14 @@ public class DataManager {
                     BufferedSource source = response.body().source();
                     String json = source.readUtf8();
                     response.close();
-                    future.complete(gson.fromJson(json, JsonObject.class));
+                    if (allowNull && (json == null || json.equals("null") || json.isEmpty())) {
+                        future.complete(null);
+                    } else {
+                        future.complete(gson.fromJson(json, type));
+                    }
                 } else {
                     response.close();
-                    future.complete(new JsonObject());
+                    future.complete(allowNull ? null : defaultValue);
                 }
             }
         });
@@ -423,40 +433,21 @@ public class DataManager {
     }
 
     /**
+     * Fetches bounties from the API asynchronously
+     *
+     * @return CompletableFuture containing the bounties JSON response
+     */
+    public CompletableFuture<JsonObject> getBountiesAsync() {
+        return fetchJsonAsync(BOUNTIES_ENDPOINT, JsonObject.class, new JsonObject(), false);
+    }
+
+    /**
      * Fetches events from the API asynchronously
-     * 
+     *
      * @return CompletableFuture containing the events JSON array response
      */
     public CompletableFuture<JsonArray> getEventsAsync() {
-        CompletableFuture<JsonArray> future = new CompletableFuture<>();
-
-        Request request = new Request.Builder()
-                .url(EVENTS_ENDPOINT)
-                .get()
-                .build();
-
-        okHttpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                log.debug("Failed to fetch events: {}", e.getMessage());
-                future.complete(new JsonArray());
-            }
-
-            @Override
-            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    BufferedSource source = response.body().source();
-                    String json = source.readUtf8();
-                    response.close();
-                    future.complete(gson.fromJson(json, JsonArray.class));
-                } else {
-                    response.close();
-                    future.complete(new JsonArray());
-                }
-            }
-        });
-
-        return future;
+        return fetchJsonAsync(EVENTS_ENDPOINT, JsonArray.class, new JsonArray(), false);
     }
 
     /**
@@ -465,39 +456,7 @@ public class DataManager {
      * @return CompletableFuture containing the poll JSON object, or null if no active poll
      */
     public CompletableFuture<JsonObject> getLastPollAsync() {
-        CompletableFuture<JsonObject> future = new CompletableFuture<>();
-
-        Request request = new Request.Builder()
-                .url(LAST_POLL_ENDPOINT)
-                .get()
-                .build();
-
-        okHttpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                log.debug("Failed to fetch last poll: {}", e.getMessage());
-                future.complete(null);
-            }
-
-            @Override
-            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    BufferedSource source = response.body().source();
-                    String json = source.readUtf8();
-                    response.close();
-                    if (json == null || json.equals("null") || json.isEmpty()) {
-                        future.complete(null);
-                    } else {
-                        future.complete(gson.fromJson(json, JsonObject.class));
-                    }
-                } else {
-                    response.close();
-                    future.complete(null);
-                }
-            }
-        });
-
-        return future;
+        return fetchJsonAsync(LAST_POLL_ENDPOINT, JsonObject.class, null, true);
     }
 
     private final AtomicBoolean apiFailureMode = new AtomicBoolean(false);
