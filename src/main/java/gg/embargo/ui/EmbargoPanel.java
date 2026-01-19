@@ -94,16 +94,12 @@ public class EmbargoPanel extends PluginPanel {
     // Events section (contains Of The Week and Bounties subsections)
     private JPanel eventsContainer;
 
-    // Of The Week subsection
-    private JLabel ofTheWeekStatusLabel;
-    private JLabel ofTheWeekNameLabel;
-    private JLabel ofTheWeekMetricLabel;
-    private JLabel ofTheWeekParticipantsLabel;
+    // Of The Week subsection - dynamic panels for ongoing/upcoming
+    private JPanel ofTheWeekOngoingPanel;
+    private JPanel ofTheWeekUpcomingPanel;
 
-    // Bounties subsection
-    private JLabel bountyStatusLabel;
-    private JLabel bountyNameLabel;
-    private JLabel bountyTimeLabel;
+    // Bounties subsection - dynamic panel for multiple bounties
+    private JPanel bountiesListPanel;
     private final Set<Integer> alertedBountyIds = new HashSet<>();
 
     @Inject
@@ -342,36 +338,24 @@ public class EmbargoPanel extends PluginPanel {
         eventsContainer.add(ofTheWeekHeader);
         eventsContainer.add(Box.createVerticalStrut(4));
 
-        // Of The Week status label
-        ofTheWeekStatusLabel = new JLabel("Loading...");
-        ofTheWeekStatusLabel.setFont(smallFont);
-        ofTheWeekStatusLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        ofTheWeekStatusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        eventsContainer.add(ofTheWeekStatusLabel);
+        // Ongoing events panel
+        ofTheWeekOngoingPanel = new JPanel();
+        ofTheWeekOngoingPanel.setLayout(new BoxLayout(ofTheWeekOngoingPanel, BoxLayout.Y_AXIS));
+        ofTheWeekOngoingPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        ofTheWeekOngoingPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel ongoingLoading = new JLabel("Loading...");
+        ongoingLoading.setFont(smallFont);
+        ongoingLoading.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        ofTheWeekOngoingPanel.add(ongoingLoading);
+        eventsContainer.add(ofTheWeekOngoingPanel);
 
-        // Of The Week name label
-        ofTheWeekNameLabel = new JLabel();
-        ofTheWeekNameLabel.setFont(smallFont);
-        ofTheWeekNameLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        ofTheWeekNameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        ofTheWeekNameLabel.setVisible(false);
-        eventsContainer.add(ofTheWeekNameLabel);
-
-        // Of The Week metric label
-        ofTheWeekMetricLabel = new JLabel();
-        ofTheWeekMetricLabel.setFont(smallFont);
-        ofTheWeekMetricLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        ofTheWeekMetricLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        ofTheWeekMetricLabel.setVisible(false);
-        eventsContainer.add(ofTheWeekMetricLabel);
-
-        // Of The Week participants label
-        ofTheWeekParticipantsLabel = new JLabel();
-        ofTheWeekParticipantsLabel.setFont(smallFont);
-        ofTheWeekParticipantsLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        ofTheWeekParticipantsLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        ofTheWeekParticipantsLabel.setVisible(false);
-        eventsContainer.add(ofTheWeekParticipantsLabel);
+        // Upcoming events panel
+        ofTheWeekUpcomingPanel = new JPanel();
+        ofTheWeekUpcomingPanel.setLayout(new BoxLayout(ofTheWeekUpcomingPanel, BoxLayout.Y_AXIS));
+        ofTheWeekUpcomingPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        ofTheWeekUpcomingPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        ofTheWeekUpcomingPanel.setVisible(false);
+        eventsContainer.add(ofTheWeekUpcomingPanel);
 
         eventsContainer.add(Box.createVerticalStrut(8));
 
@@ -383,28 +367,16 @@ public class EmbargoPanel extends PluginPanel {
         eventsContainer.add(bountyHeader);
         eventsContainer.add(Box.createVerticalStrut(4));
 
-        // Bounty status label
-        bountyStatusLabel = new JLabel("Loading...");
-        bountyStatusLabel.setFont(smallFont);
-        bountyStatusLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        bountyStatusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        eventsContainer.add(bountyStatusLabel);
-
-        // Bounty name label (hidden when no active bounty)
-        bountyNameLabel = new JLabel();
-        bountyNameLabel.setFont(smallFont);
-        bountyNameLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        bountyNameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        bountyNameLabel.setVisible(false);
-        eventsContainer.add(bountyNameLabel);
-
-        // Time remaining label (hidden when no active bounty)
-        bountyTimeLabel = new JLabel();
-        bountyTimeLabel.setFont(smallFont);
-        bountyTimeLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        bountyTimeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        bountyTimeLabel.setVisible(false);
-        eventsContainer.add(bountyTimeLabel);
+        // Bounties list panel (shows ongoing + recent)
+        bountiesListPanel = new JPanel();
+        bountiesListPanel.setLayout(new BoxLayout(bountiesListPanel, BoxLayout.Y_AXIS));
+        bountiesListPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        bountiesListPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel bountiesLoading = new JLabel("Loading...");
+        bountiesLoading.setFont(smallFont);
+        bountiesLoading.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        bountiesListPanel.add(bountiesLoading);
+        eventsContainer.add(bountiesListPanel);
 
         // Fetch events and bounties
         fetchAndUpdateEvents();
@@ -426,58 +398,125 @@ public class EmbargoPanel extends PluginPanel {
      * Updates the Of The Week panel with the API response
      */
     private void updateOfTheWeekPanel(JsonArray events) {
+        ofTheWeekOngoingPanel.removeAll();
+        ofTheWeekUpcomingPanel.removeAll();
+
         if (events == null || events.size() == 0) {
-            ofTheWeekStatusLabel.setText("No active events");
-            ofTheWeekNameLabel.setVisible(false);
-            ofTheWeekMetricLabel.setVisible(false);
-            ofTheWeekParticipantsLabel.setVisible(false);
+            JLabel noEvents = new JLabel("No events");
+            noEvents.setFont(smallFont);
+            noEvents.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+            ofTheWeekOngoingPanel.add(noEvents);
+            ofTheWeekUpcomingPanel.setVisible(false);
             eventsContainer.revalidate();
             eventsContainer.repaint();
             return;
         }
 
-        // Find an active (started but not completed) event
-        JsonObject activeEvent = null;
+        // Separate ongoing and upcoming events
+        java.util.List<JsonObject> ongoingEvents = new ArrayList<>();
+        java.util.List<JsonObject> upcomingEvents = new ArrayList<>();
+
         for (JsonElement element : events) {
             JsonObject event = element.getAsJsonObject();
             boolean started = event.has("started") && event.get("started").getAsBoolean();
             boolean completed = event.has("completed") && event.get("completed").getAsBoolean();
+
             if (started && !completed) {
-                activeEvent = event;
-                break;
+                ongoingEvents.add(event);
+            } else if (!started && !completed) {
+                upcomingEvents.add(event);
             }
         }
 
-        if (activeEvent == null) {
-            ofTheWeekStatusLabel.setText("No active events");
-            ofTheWeekNameLabel.setVisible(false);
-            ofTheWeekMetricLabel.setVisible(false);
-            ofTheWeekParticipantsLabel.setVisible(false);
+        // Display ongoing events
+        if (ongoingEvents.isEmpty()) {
+            JLabel noOngoing = new JLabel("No ongoing events");
+            noOngoing.setFont(smallFont);
+            noOngoing.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+            ofTheWeekOngoingPanel.add(noOngoing);
         } else {
-            String name = activeEvent.has("name") ? activeEvent.get("name").getAsString() : "Unknown";
-            String metric = activeEvent.has("metric") ? activeEvent.get("metric").getAsString() : "";
-            int participants = activeEvent.has("participantCount") ? activeEvent.get("participantCount").getAsInt() : 0;
+            JLabel ongoingLabel = new JLabel("Ongoing");
+            ongoingLabel.setFont(smallFont);
+            ongoingLabel.setForeground(new Color(0x00, 0xc8, 0x00)); // Green for ongoing
+            ofTheWeekOngoingPanel.add(ongoingLabel);
 
-            ofTheWeekStatusLabel.setText(htmlLabel("Status:", " Active"));
-
-            ofTheWeekNameLabel.setText(htmlLabel("Event:", " " + name));
-            ofTheWeekNameLabel.setVisible(true);
-
-            // Capitalize first letter of metric
-            if (!metric.isEmpty()) {
-                String formattedMetric = metric.substring(0, 1).toUpperCase() + metric.substring(1);
-                ofTheWeekMetricLabel.setText(htmlLabel("Skill:", " " + formattedMetric));
-                ofTheWeekMetricLabel.setVisible(true);
-            } else {
-                ofTheWeekMetricLabel.setVisible(false);
+            for (JsonObject event : ongoingEvents) {
+                addEventToPanel(ofTheWeekOngoingPanel, event, true);
             }
+        }
 
-            ofTheWeekParticipantsLabel.setText(htmlLabel("Participants:", " " + participants));
-            ofTheWeekParticipantsLabel.setVisible(true);
+        // Display upcoming events
+        if (!upcomingEvents.isEmpty()) {
+            ofTheWeekUpcomingPanel.add(Box.createVerticalStrut(6));
+            JLabel upcomingLabel = new JLabel("Upcoming");
+            upcomingLabel.setFont(smallFont);
+            upcomingLabel.setForeground(new Color(0xff, 0xc0, 0x00)); // Orange/yellow for upcoming
+            ofTheWeekUpcomingPanel.add(upcomingLabel);
+
+            for (JsonObject event : upcomingEvents) {
+                addEventToPanel(ofTheWeekUpcomingPanel, event, false);
+            }
+            ofTheWeekUpcomingPanel.setVisible(true);
+        } else {
+            ofTheWeekUpcomingPanel.setVisible(false);
         }
 
         eventsContainer.revalidate();
         eventsContainer.repaint();
+    }
+
+    /**
+     * Adds a single event entry to the given panel
+     */
+    private void addEventToPanel(JPanel panel, JsonObject event, boolean isOngoing) {
+        String name = event.has("name") ? event.get("name").getAsString() : "Unknown";
+        String metric = event.has("metric") ? event.get("metric").getAsString() : "";
+        int participants = event.has("participantCount") ? event.get("participantCount").getAsInt() : 0;
+        int eventId = event.has("wiseOldManId") ? event.get("wiseOldManId").getAsInt() :
+                      (event.has("id") ? event.get("id").getAsInt() : 0);
+
+        // Shorten event name: "Boss Of The Week #X |" -> "BOTW |", "Skill Of The Week #X |" -> "SOTW |"
+        String displayName = name
+                .replaceFirst("Boss Of The Week #\\d+\\s*\\|", "BOTW |")
+                .replaceFirst("Skill Of The Week #\\d+\\s*\\|", "SOTW |")
+                .trim();
+
+        // Event name as clickable link
+        JLabel nameLabel = new JLabel(displayName);
+        nameLabel.setFont(smallFont);
+        nameLabel.setForeground(Color.WHITE);
+        nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        if (eventId > 0) {
+            nameLabel.setCursor(new Cursor(Cursor.HAND_CURSOR));
+            nameLabel.setToolTipText("Click to view on embargo.gg");
+            final int finalEventId = eventId;
+            nameLabel.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    LinkBrowser.browse("https://embargo.gg/competition/" + finalEventId);
+                }
+            });
+        }
+        panel.add(nameLabel);
+
+        // Metric (using "Metric:" as label since it could be skill or boss)
+        if (!metric.isEmpty()) {
+            String formattedMetric = metric.substring(0, 1).toUpperCase() + metric.substring(1).replace("_", " ");
+            JLabel metricLabel = new JLabel(htmlLabel("Metric:", " " + formattedMetric));
+            metricLabel.setFont(smallFont);
+            metricLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+            metricLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            panel.add(metricLabel);
+        }
+
+        // Participants (only for ongoing)
+        if (isOngoing) {
+            JLabel participantsLabel = new JLabel(htmlLabel("Participants:", " " + participants));
+            participantsLabel.setFont(smallFont);
+            participantsLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+            participantsLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            panel.add(participantsLabel);
+        }
     }
 
     /**
@@ -493,64 +532,142 @@ public class EmbargoPanel extends PluginPanel {
 
     /**
      * Updates the bounty panel with the API response
+     * Shows: ongoing bounty (if any) + 2 most recent completed bounties
      */
     private void updateBountyPanel(JsonObject response) {
+        bountiesListPanel.removeAll();
+
         if (response == null || !response.has("bounties")) {
-            bountyStatusLabel.setText("No active bounties");
-            bountyNameLabel.setVisible(false);
-            bountyTimeLabel.setVisible(false);
+            JLabel noBounties = new JLabel("No bounties");
+            noBounties.setFont(smallFont);
+            noBounties.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+            bountiesListPanel.add(noBounties);
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
             return;
         }
 
         JsonArray bounties = response.getAsJsonArray("bounties");
-        JsonObject activeBounty = null;
+        java.util.List<JsonObject> activeBounties = new ArrayList<>();
+        java.util.List<JsonObject> recentBounties = new ArrayList<>();
 
-        // Find the first active bounty
+        // Separate active and completed bounties
         for (JsonElement element : bounties) {
             JsonObject bounty = element.getAsJsonObject();
-            String status = bounty.get("status").getAsString();
+            String status = bounty.has("status") ? bounty.get("status").getAsString() : "";
+
             if ("active".equalsIgnoreCase(status)) {
-                activeBounty = bounty;
-                break;
+                activeBounties.add(bounty);
+            } else if ("completed".equalsIgnoreCase(status) || "expired".equalsIgnoreCase(status)) {
+                recentBounties.add(bounty);
             }
         }
 
-        if (activeBounty == null) {
-            bountyStatusLabel.setText("No active bounties");
-            bountyNameLabel.setVisible(false);
-            bountyTimeLabel.setVisible(false);
-        } else {
-            String name = activeBounty.get("name").getAsString();
-            String endTimeStr = activeBounty.get("endTime").getAsString();
+        boolean hasContent = false;
 
-            bountyStatusLabel.setText(htmlLabel("Status:", " Active"));
-            bountyNameLabel.setText(htmlLabel("Target:", " " + name.replaceFirst("Bounty #\\d+ - ", "")));
-            bountyNameLabel.setVisible(true);
+        // Display active bounties first
+        if (!activeBounties.isEmpty()) {
+            hasContent = true;
+            JLabel activeLabel = new JLabel("Active");
+            activeLabel.setFont(smallFont);
+            activeLabel.setForeground(new Color(0x00, 0xc8, 0x00)); // Green for active
+            bountiesListPanel.add(activeLabel);
 
-            // Calculate time remaining
-            try {
-                ZonedDateTime endTime = ZonedDateTime.parse(endTimeStr);
-                long minutesRemaining = Instant.now().until(endTime.toInstant(), ChronoUnit.MINUTES);
-                if (minutesRemaining > 0) {
-                    bountyTimeLabel.setText(htmlLabel("Time left:", " " + minutesRemaining + " min"));
-                } else {
-                    bountyTimeLabel.setText(htmlLabel("Time left:", " Ending soon"));
+            for (JsonObject activeBounty : activeBounties) {
+                addBountyToPanel(bountiesListPanel, activeBounty, true);
+
+                // Alert user if this is a new bounty they haven't been alerted about
+                int bountyId = activeBounty.get("id").getAsInt();
+                if (isLoggedIn && !alertedBountyIds.contains(bountyId)) {
+                    alertedBountyIds.add(bountyId);
+                    sendBountyAlert(activeBounty);
                 }
-                bountyTimeLabel.setVisible(true);
-            } catch (Exception e) {
-                bountyTimeLabel.setVisible(false);
+            }
+        }
+
+        // Display up to 2 most recent completed bounties
+        if (!recentBounties.isEmpty()) {
+            if (hasContent) {
+                bountiesListPanel.add(Box.createVerticalStrut(6));
             }
 
-            // Alert user if this is a new bounty they haven't been alerted about
-            int bountyId = activeBounty.get("id").getAsInt();
-            if (isLoggedIn && !alertedBountyIds.contains(bountyId)) {
-                alertedBountyIds.add(bountyId);
-                sendBountyAlert(activeBounty);
+            JLabel recentLabel = new JLabel("Recent");
+            recentLabel.setFont(smallFont);
+            recentLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+            bountiesListPanel.add(recentLabel);
+
+            int count = 0;
+            for (JsonObject bounty : recentBounties) {
+                if (count >= 2) break;
+                addBountyToPanel(bountiesListPanel, bounty, false);
+                count++;
             }
+            hasContent = true;
+        }
+
+        if (!hasContent) {
+            JLabel noBounties = new JLabel("No bounties");
+            noBounties.setFont(smallFont);
+            noBounties.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+            bountiesListPanel.add(noBounties);
         }
 
         eventsContainer.revalidate();
         eventsContainer.repaint();
+    }
+
+    /**
+     * Adds a single bounty entry to the given panel
+     */
+    private void addBountyToPanel(JPanel panel, JsonObject bounty, boolean isActive) {
+        String name = bounty.has("name") ? bounty.get("name").getAsString() : "Unknown";
+        String target = name.replaceFirst("Bounty #\\d+ - ", "");
+        int bountyId = bounty.has("id") ? bounty.get("id").getAsInt() : 0;
+
+        // Target name as clickable link
+        JLabel targetLabel = new JLabel(target);
+        targetLabel.setFont(smallFont);
+        targetLabel.setForeground(Color.WHITE);
+        targetLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        if (bountyId > 0) {
+            targetLabel.setCursor(new Cursor(Cursor.HAND_CURSOR));
+            targetLabel.setToolTipText("Click to view on embargo.gg");
+            final int finalBountyId = bountyId;
+            targetLabel.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    LinkBrowser.browse("https://embargo.gg/bounties/" + finalBountyId);
+                }
+            });
+        }
+        panel.add(targetLabel);
+
+        // Time remaining (for active) or completion status (for completed)
+        if (isActive && bounty.has("endTime")) {
+            try {
+                String endTimeStr = bounty.get("endTime").getAsString();
+                ZonedDateTime endTime = ZonedDateTime.parse(endTimeStr);
+                long minutesRemaining = Instant.now().until(endTime.toInstant(), ChronoUnit.MINUTES);
+
+                String timeText;
+                if (minutesRemaining > 60) {
+                    long hours = minutesRemaining / 60;
+                    timeText = hours + "h " + (minutesRemaining % 60) + "m";
+                } else if (minutesRemaining > 0) {
+                    timeText = minutesRemaining + " min";
+                } else {
+                    timeText = "Ending soon";
+                }
+
+                JLabel timeLabel = new JLabel(htmlLabel("Time left:", " " + timeText));
+                timeLabel.setFont(smallFont);
+                timeLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+                timeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+                panel.add(timeLabel);
+            } catch (Exception e) {
+                // Skip time label if parsing fails
+            }
+        }
     }
 
     /**

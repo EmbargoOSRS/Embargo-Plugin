@@ -104,12 +104,12 @@ public class MissingRequirementsPanel extends PluginPanel {
         this.executorService = executorService;
 
         setLayout(new BorderLayout());
-        setBackground(ColorScheme.DARK_GRAY_COLOR);
+        setBackground(ColorScheme.DARKER_GRAY_COLOR);
         setBorder(new EmptyBorder(5, 0, 5, 0));
 
         // Create subtitle panel with instructions
         JPanel subtitlePanel = new JPanel(new BorderLayout());
-        subtitlePanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        subtitlePanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         subtitlePanel.setBorder(new EmptyBorder(0, 0, 8, 0));
 
         JLabel subtitle = new JLabel("Hover for details, click to open wiki");
@@ -122,12 +122,12 @@ public class MissingRequirementsPanel extends PluginPanel {
         // Create items container with increased gap for better spacing
         itemsContainer = new JPanel();
         itemsContainer.setLayout(new GridLayout(0, ITEMS_PER_ROW, 4, 4));
-        itemsContainer.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        itemsContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
         JScrollPane scrollPane = new JScrollPane(itemsContainer);
-        scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        scrollPane.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         scrollPane.setBorder(null);
-        scrollPane.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
+        scrollPane.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
         add(scrollPane, BorderLayout.CENTER);
     }
 
