@@ -122,6 +122,90 @@ public class EmbargoPanel extends PluginPanel {
                 + "</span></body></html>";
     }
 
+    /**
+     * Creates a styled label with smallFont, light gray color, and left alignment
+     */
+    private JLabel createSmallLabel(String text) {
+        JLabel label = new JLabel(text);
+        label.setFont(smallFont);
+        label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return label;
+    }
+
+    /**
+     * Creates a styled label with smallFont, specified color, and left alignment
+     */
+    private JLabel createSmallLabel(String text, Color color) {
+        JLabel label = new JLabel(text);
+        label.setFont(smallFont);
+        label.setForeground(color);
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return label;
+    }
+
+    /**
+     * Creates a section header label (bold, 12pt for main headers, 11pt for subsections)
+     */
+    private JLabel createHeader(String text, boolean isMain) {
+        JLabel header = new JLabel(text);
+        header.setFont(new Font("SansSerif", Font.BOLD, isMain ? 12 : 11));
+        header.setForeground(isMain ? Color.WHITE : ColorScheme.LIGHT_GRAY_COLOR);
+        header.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return header;
+    }
+
+    /**
+     * Creates a panel with vertical BoxLayout and dark background
+     */
+    private JPanel createVerticalPanel() {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return panel;
+    }
+
+    /**
+     * Makes a label clickable, opening the given URL on click
+     */
+    private void makeClickable(JLabel label, String url, String tooltip) {
+        label.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        label.setToolTipText(tooltip);
+        label.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                LinkBrowser.browse(url);
+            }
+        });
+    }
+
+    /**
+     * Formats minutes remaining into a human-readable string (e.g., "2d 5h", "3h 30m", "45 min")
+     */
+    private String formatTimeRemaining(long minutesRemaining) {
+        if (minutesRemaining > 1440) { // More than 24 hours
+            long days = minutesRemaining / 1440;
+            return days + "d " + ((minutesRemaining % 1440) / 60) + "h";
+        } else if (minutesRemaining > 60) {
+            long hours = minutesRemaining / 60;
+            return hours + "h " + (minutesRemaining % 60) + "m";
+        } else if (minutesRemaining > 0) {
+            return minutesRemaining + " min";
+        } else {
+            return "Ending soon";
+        }
+    }
+
+    /**
+     * Applies standard styling to a label (smallFont, light gray, left aligned)
+     */
+    private void styleLabel(JLabel label) {
+        label.setFont(smallFont);
+        label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+    }
+
     void setupVersionPanel() {
         // Set up versionPanel with BoxLayout for better control
         versionPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -133,34 +217,11 @@ public class EmbargoPanel extends PluginPanel {
         version.setFont(smallFont);
         version.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        // Set up custom embargo labels
-        isRegisteredWithClanLabel.setFont(smallFont);
-        isRegisteredWithClanLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        isRegisteredWithClanLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        embargoScoreLabel.setFont(smallFont);
-        embargoScoreLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        embargoScoreLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        accountScoreLabel.setFont(smallFont);
-        accountScoreLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        accountScoreLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        communityScoreLabel.setFont(smallFont);
-        communityScoreLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        communityScoreLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        currentCALabel.setFont(smallFont);
-        currentCALabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        currentCALabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        loggedLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        loggedLabel.setFont(smallFont);
-        loggedLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        currentRankLabel.setFont(smallFont);
-        currentRankLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        currentRankLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // Apply standard styling to all info labels
+        for (JLabel label : new JLabel[]{isRegisteredWithClanLabel, embargoScoreLabel, accountScoreLabel,
+                communityScoreLabel, currentCALabel, loggedLabel, currentRankLabel}) {
+            styleLabel(label);
+        }
 
         emailLabel.setForeground(Color.WHITE);
         emailLabel.setFont(smallFont);
@@ -335,88 +396,45 @@ public class EmbargoPanel extends PluginPanel {
      * Sets up the Events section panel with Of The Week and Bounties subsections
      */
     void setupEventsPanel() {
-        eventsContainer = new JPanel();
-        eventsContainer.setLayout(new BoxLayout(eventsContainer, BoxLayout.Y_AXIS));
-        eventsContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        eventsContainer = createVerticalPanel();
         eventsContainer.setBorder(BorderFactory.createCompoundBorder(
                 new MatteBorder(1, 0, 0, 0, ColorScheme.LIGHT_GRAY_COLOR),
                 new EmptyBorder(10, 10, 10, 10)));
 
         // Main Events Header
-        JLabel eventsHeader = new JLabel("Events");
-        eventsHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
-        eventsHeader.setForeground(Color.WHITE);
-        eventsHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
-        eventsContainer.add(eventsHeader);
+        eventsContainer.add(createHeader("Events", true));
         eventsContainer.add(Box.createVerticalStrut(8));
 
         // === Of The Week Subsection ===
-        JLabel ofTheWeekHeader = new JLabel("Of The Week");
-        ofTheWeekHeader.setFont(new Font("SansSerif", Font.BOLD, 11));
-        ofTheWeekHeader.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        ofTheWeekHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
-        eventsContainer.add(ofTheWeekHeader);
+        eventsContainer.add(createHeader("Of The Week", false));
         eventsContainer.add(Box.createVerticalStrut(4));
 
-        // Ongoing events panel
-        ofTheWeekOngoingPanel = new JPanel();
-        ofTheWeekOngoingPanel.setLayout(new BoxLayout(ofTheWeekOngoingPanel, BoxLayout.Y_AXIS));
-        ofTheWeekOngoingPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        ofTheWeekOngoingPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JLabel ongoingLoading = new JLabel("Loading...");
-        ongoingLoading.setFont(smallFont);
-        ongoingLoading.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        ofTheWeekOngoingPanel.add(ongoingLoading);
+        ofTheWeekOngoingPanel = createVerticalPanel();
+        ofTheWeekOngoingPanel.add(createSmallLabel("Loading..."));
         eventsContainer.add(ofTheWeekOngoingPanel);
 
-        // Upcoming events panel
-        ofTheWeekUpcomingPanel = new JPanel();
-        ofTheWeekUpcomingPanel.setLayout(new BoxLayout(ofTheWeekUpcomingPanel, BoxLayout.Y_AXIS));
-        ofTheWeekUpcomingPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        ofTheWeekUpcomingPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        ofTheWeekUpcomingPanel = createVerticalPanel();
         ofTheWeekUpcomingPanel.setVisible(false);
         eventsContainer.add(ofTheWeekUpcomingPanel);
 
         eventsContainer.add(Box.createVerticalStrut(8));
 
         // === Bounties Subsection ===
-        JLabel bountyHeader = new JLabel("Bounties");
-        bountyHeader.setFont(new Font("SansSerif", Font.BOLD, 11));
-        bountyHeader.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        bountyHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
-        eventsContainer.add(bountyHeader);
+        eventsContainer.add(createHeader("Bounties", false));
         eventsContainer.add(Box.createVerticalStrut(4));
 
-        // Bounties list panel (shows ongoing + recent)
-        bountiesListPanel = new JPanel();
-        bountiesListPanel.setLayout(new BoxLayout(bountiesListPanel, BoxLayout.Y_AXIS));
-        bountiesListPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        bountiesListPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JLabel bountiesLoading = new JLabel("Loading...");
-        bountiesLoading.setFont(smallFont);
-        bountiesLoading.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        bountiesListPanel.add(bountiesLoading);
+        bountiesListPanel = createVerticalPanel();
+        bountiesListPanel.add(createSmallLabel("Loading..."));
         eventsContainer.add(bountiesListPanel);
 
         eventsContainer.add(Box.createVerticalStrut(8));
 
         // === Polls Subsection ===
-        JLabel pollsHeader = new JLabel("Polls");
-        pollsHeader.setFont(new Font("SansSerif", Font.BOLD, 11));
-        pollsHeader.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        pollsHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
-        eventsContainer.add(pollsHeader);
+        eventsContainer.add(createHeader("Polls", false));
         eventsContainer.add(Box.createVerticalStrut(4));
 
-        // Polls panel
-        pollsPanel = new JPanel();
-        pollsPanel.setLayout(new BoxLayout(pollsPanel, BoxLayout.Y_AXIS));
-        pollsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        pollsPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JLabel pollsLoading = new JLabel("Loading...");
-        pollsLoading.setFont(smallFont);
-        pollsLoading.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        pollsPanel.add(pollsLoading);
+        pollsPanel = createVerticalPanel();
+        pollsPanel.add(createSmallLabel("Loading..."));
         eventsContainer.add(pollsPanel);
 
         // Fetch events, bounties, and polls
@@ -436,6 +454,9 @@ public class EmbargoPanel extends PluginPanel {
         });
     }
 
+    private static final Color COLOR_GREEN = new Color(0x00, 0xc8, 0x00);
+    private static final Color COLOR_ORANGE = new Color(0xff, 0xc0, 0x00);
+
     /**
      * Updates the Of The Week panel with the API response
      */
@@ -444,10 +465,7 @@ public class EmbargoPanel extends PluginPanel {
         ofTheWeekUpcomingPanel.removeAll();
 
         if (events == null || events.size() == 0) {
-            JLabel noEvents = new JLabel("No events");
-            noEvents.setFont(smallFont);
-            noEvents.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-            ofTheWeekOngoingPanel.add(noEvents);
+            ofTheWeekOngoingPanel.add(createSmallLabel("No events"));
             ofTheWeekUpcomingPanel.setVisible(false);
             eventsContainer.revalidate();
             eventsContainer.repaint();
@@ -472,15 +490,9 @@ public class EmbargoPanel extends PluginPanel {
 
         // Display ongoing events
         if (ongoingEvents.isEmpty()) {
-            JLabel noOngoing = new JLabel("No ongoing events");
-            noOngoing.setFont(smallFont);
-            noOngoing.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-            ofTheWeekOngoingPanel.add(noOngoing);
+            ofTheWeekOngoingPanel.add(createSmallLabel("No ongoing events"));
         } else {
-            JLabel ongoingLabel = new JLabel("Ongoing");
-            ongoingLabel.setFont(smallFont);
-            ongoingLabel.setForeground(new Color(0x00, 0xc8, 0x00)); // Green for ongoing
-            ofTheWeekOngoingPanel.add(ongoingLabel);
+            ofTheWeekOngoingPanel.add(createSmallLabel("Ongoing", COLOR_GREEN));
 
             for (JsonObject event : ongoingEvents) {
                 addEventToPanel(ofTheWeekOngoingPanel, event, true);
@@ -498,10 +510,7 @@ public class EmbargoPanel extends PluginPanel {
         // Display upcoming events
         if (!upcomingEvents.isEmpty()) {
             ofTheWeekUpcomingPanel.add(Box.createVerticalStrut(6));
-            JLabel upcomingLabel = new JLabel("Upcoming");
-            upcomingLabel.setFont(smallFont);
-            upcomingLabel.setForeground(new Color(0xff, 0xc0, 0x00)); // Orange/yellow for upcoming
-            ofTheWeekUpcomingPanel.add(upcomingLabel);
+            ofTheWeekUpcomingPanel.add(createSmallLabel("Upcoming", COLOR_ORANGE));
 
             for (JsonObject event : upcomingEvents) {
                 addEventToPanel(ofTheWeekUpcomingPanel, event, false);
@@ -519,7 +528,6 @@ public class EmbargoPanel extends PluginPanel {
      * Adds a single event entry to the given panel
      */
     private void addEventToPanel(JPanel panel, JsonObject event, boolean isOngoing) {
-        // Add spacing before each event entry
         panel.add(Box.createVerticalStrut(4));
 
         String name = event.has("name") ? event.get("name").getAsString() : "Unknown";
@@ -535,20 +543,9 @@ public class EmbargoPanel extends PluginPanel {
                 .trim();
 
         // Event name as clickable link
-        JLabel nameLabel = new JLabel(displayName);
-        nameLabel.setFont(smallFont);
-        nameLabel.setForeground(Color.WHITE);
-        nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel nameLabel = createSmallLabel(displayName, Color.WHITE);
         if (eventId > 0) {
-            nameLabel.setCursor(new Cursor(Cursor.HAND_CURSOR));
-            nameLabel.setToolTipText("Click to view on embargo.gg");
-            final int finalEventId = eventId;
-            nameLabel.addMouseListener(new MouseAdapter() {
-                @Override
-                public void mouseClicked(MouseEvent e) {
-                    LinkBrowser.browse("https://embargo.gg/competition/" + finalEventId);
-                }
-            });
+            makeClickable(nameLabel, "https://embargo.gg/competition/" + eventId, "Click to view on embargo.gg");
         }
         panel.add(nameLabel);
 
@@ -556,18 +553,14 @@ public class EmbargoPanel extends PluginPanel {
         if (!metric.isEmpty()) {
             String formattedMetric = metric.substring(0, 1).toUpperCase() + metric.substring(1).replace("_", " ");
             JLabel metricLabel = new JLabel(htmlLabel("Metric:", " " + formattedMetric));
-            metricLabel.setFont(smallFont);
-            metricLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-            metricLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            styleLabel(metricLabel);
             panel.add(metricLabel);
         }
 
         // Participants (only for ongoing)
         if (isOngoing) {
             JLabel participantsLabel = new JLabel(htmlLabel("Participants:", " " + participants));
-            participantsLabel.setFont(smallFont);
-            participantsLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-            participantsLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            styleLabel(participantsLabel);
             panel.add(participantsLabel);
         }
     }
@@ -591,10 +584,7 @@ public class EmbargoPanel extends PluginPanel {
         bountiesListPanel.removeAll();
 
         if (response == null || !response.has("bounties")) {
-            JLabel noBounties = new JLabel("No bounties");
-            noBounties.setFont(smallFont);
-            noBounties.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-            bountiesListPanel.add(noBounties);
+            bountiesListPanel.add(createSmallLabel("No bounties"));
             eventsContainer.revalidate();
             eventsContainer.repaint();
             return;
@@ -621,10 +611,7 @@ public class EmbargoPanel extends PluginPanel {
         // Display active bounties first
         if (!activeBounties.isEmpty()) {
             hasContent = true;
-            JLabel activeLabel = new JLabel("Active");
-            activeLabel.setFont(smallFont);
-            activeLabel.setForeground(new Color(0x00, 0xc8, 0x00)); // Green for active
-            bountiesListPanel.add(activeLabel);
+            bountiesListPanel.add(createSmallLabel("Active", COLOR_GREEN));
 
             for (JsonObject activeBounty : activeBounties) {
                 addBountyToPanel(bountiesListPanel, activeBounty, true);
@@ -644,10 +631,7 @@ public class EmbargoPanel extends PluginPanel {
                 bountiesListPanel.add(Box.createVerticalStrut(6));
             }
 
-            JLabel recentLabel = new JLabel("Recent");
-            recentLabel.setFont(smallFont);
-            recentLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-            bountiesListPanel.add(recentLabel);
+            bountiesListPanel.add(createSmallLabel("Recent"));
 
             int count = 0;
             for (JsonObject bounty : recentBounties) {
@@ -659,10 +643,7 @@ public class EmbargoPanel extends PluginPanel {
         }
 
         if (!hasContent) {
-            JLabel noBounties = new JLabel("No bounties");
-            noBounties.setFont(smallFont);
-            noBounties.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-            bountiesListPanel.add(noBounties);
+            bountiesListPanel.add(createSmallLabel("No bounties"));
         }
 
         eventsContainer.revalidate();
@@ -673,7 +654,6 @@ public class EmbargoPanel extends PluginPanel {
      * Adds a single bounty entry to the given panel
      */
     private void addBountyToPanel(JPanel panel, JsonObject bounty, boolean isActive) {
-        // Add spacing before each bounty entry
         panel.add(Box.createVerticalStrut(4));
 
         String name = bounty.has("name") ? bounty.get("name").getAsString() : "Unknown";
@@ -681,44 +661,21 @@ public class EmbargoPanel extends PluginPanel {
         int bountyId = bounty.has("id") ? bounty.get("id").getAsInt() : 0;
 
         // Target name as clickable link
-        JLabel targetLabel = new JLabel(target);
-        targetLabel.setFont(smallFont);
-        targetLabel.setForeground(Color.WHITE);
-        targetLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel targetLabel = createSmallLabel(target, Color.WHITE);
         if (bountyId > 0) {
-            targetLabel.setCursor(new Cursor(Cursor.HAND_CURSOR));
-            targetLabel.setToolTipText("Click to view on embargo.gg");
-            final int finalBountyId = bountyId;
-            targetLabel.addMouseListener(new MouseAdapter() {
-                @Override
-                public void mouseClicked(MouseEvent e) {
-                    LinkBrowser.browse("https://embargo.gg/bounties/" + finalBountyId);
-                }
-            });
+            makeClickable(targetLabel, "https://embargo.gg/bounties/" + bountyId, "Click to view on embargo.gg");
         }
         panel.add(targetLabel);
 
-        // Time remaining (for active) or completion status (for completed)
+        // Time remaining (for active)
         if (isActive && bounty.has("endTime")) {
             try {
                 String endTimeStr = bounty.get("endTime").getAsString();
                 ZonedDateTime endTime = ZonedDateTime.parse(endTimeStr);
                 long minutesRemaining = Instant.now().until(endTime.toInstant(), ChronoUnit.MINUTES);
 
-                String timeText;
-                if (minutesRemaining > 60) {
-                    long hours = minutesRemaining / 60;
-                    timeText = hours + "h " + (minutesRemaining % 60) + "m";
-                } else if (minutesRemaining > 0) {
-                    timeText = minutesRemaining + " min";
-                } else {
-                    timeText = "Ending soon";
-                }
-
-                JLabel timeLabel = new JLabel(htmlLabel("Time left:", " " + timeText));
-                timeLabel.setFont(smallFont);
-                timeLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-                timeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+                JLabel timeLabel = new JLabel(htmlLabel("Time left:", " " + formatTimeRemaining(minutesRemaining)));
+                styleLabel(timeLabel);
                 panel.add(timeLabel);
             } catch (Exception e) {
                 // Skip time label if parsing fails
@@ -778,10 +735,7 @@ public class EmbargoPanel extends PluginPanel {
         pollsPanel.removeAll();
 
         if (poll == null) {
-            JLabel noPolls = new JLabel("No active polls");
-            noPolls.setFont(smallFont);
-            noPolls.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-            pollsPanel.add(noPolls);
+            pollsPanel.add(createSmallLabel("No active polls"));
             eventsContainer.revalidate();
             eventsContainer.repaint();
             return;
@@ -794,36 +748,17 @@ public class EmbargoPanel extends PluginPanel {
             sendPollAlert(poll);
         }
 
-        // Add spacing before poll entry
         pollsPanel.add(Box.createVerticalStrut(4));
-
-        // Active label
-        JLabel activeLabel = new JLabel("Active");
-        activeLabel.setFont(smallFont);
-        activeLabel.setForeground(new Color(0x00, 0xc8, 0x00)); // Green for active
-        pollsPanel.add(activeLabel);
-
+        pollsPanel.add(createSmallLabel("Active", COLOR_GREEN));
         pollsPanel.add(Box.createVerticalStrut(4));
 
         // Poll title as clickable link
         String title = poll.has("title") ? poll.get("title").getAsString() : "Unknown Poll";
         String discordUrl = poll.has("discordUrl") ? poll.get("discordUrl").getAsString() : null;
 
-        JLabel titleLabel = new JLabel(title);
-        titleLabel.setFont(smallFont);
-        titleLabel.setForeground(Color.WHITE);
-        titleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
+        JLabel titleLabel = createSmallLabel(title, Color.WHITE);
         if (discordUrl != null && !discordUrl.isEmpty()) {
-            titleLabel.setCursor(new Cursor(Cursor.HAND_CURSOR));
-            titleLabel.setToolTipText("Click to view poll on Discord");
-            final String finalDiscordUrl = discordUrl;
-            titleLabel.addMouseListener(new MouseAdapter() {
-                @Override
-                public void mouseClicked(MouseEvent e) {
-                    LinkBrowser.browse(finalDiscordUrl);
-                }
-            });
+            makeClickable(titleLabel, discordUrl, "Click to view poll on Discord");
         }
         pollsPanel.add(titleLabel);
 
@@ -834,23 +769,8 @@ public class EmbargoPanel extends PluginPanel {
                 ZonedDateTime endsAt = ZonedDateTime.parse(endsAtStr);
                 long minutesRemaining = Instant.now().until(endsAt.toInstant(), ChronoUnit.MINUTES);
 
-                String timeText;
-                if (minutesRemaining > 1440) { // More than 24 hours
-                    long days = minutesRemaining / 1440;
-                    timeText = days + "d " + ((minutesRemaining % 1440) / 60) + "h";
-                } else if (minutesRemaining > 60) {
-                    long hours = minutesRemaining / 60;
-                    timeText = hours + "h " + (minutesRemaining % 60) + "m";
-                } else if (minutesRemaining > 0) {
-                    timeText = minutesRemaining + " min";
-                } else {
-                    timeText = "Ending soon";
-                }
-
-                JLabel timeLabel = new JLabel(htmlLabel("Ends in:", " " + timeText));
-                timeLabel.setFont(smallFont);
-                timeLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-                timeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+                JLabel timeLabel = new JLabel(htmlLabel("Ends in:", " " + formatTimeRemaining(minutesRemaining)));
+                styleLabel(timeLabel);
                 pollsPanel.add(timeLabel);
             } catch (Exception e) {
                 // Skip time label if parsing fails
