@@ -96,9 +96,49 @@ public interface EmbargoConfig extends Config
     }
 
     @ConfigSection(
+            name = "Chat Alerts",
+            description = "Control which notifications appear in your chat box",
+            position = 4
+    )
+    String chatAlertSettings = "ChatAlertSettings";
+
+    @ConfigItem(
+            keyName = "enableBountyAlerts",
+            name = "Bounty Alerts",
+            description = "Show a chat message when a new bounty becomes active",
+            position = 1,
+            section = chatAlertSettings
+    )
+    default boolean enableBountyAlerts() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "enableEventAlerts",
+            name = "Event Alerts",
+            description = "Show a chat message when a new Of The Week event starts",
+            position = 2,
+            section = chatAlertSettings
+    )
+    default boolean enableEventAlerts() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "enablePollAlerts",
+            name = "Poll Alerts",
+            description = "Show a chat message when a new poll is available",
+            position = 3,
+            section = chatAlertSettings
+    )
+    default boolean enablePollAlerts() {
+        return true;
+    }
+
+    @ConfigSection(
             name = "Chat Commands",
             description = "Section that houses Chat Command options",
-            position = 4
+            position = 5
     )
     String chatCommandSettings = "ChatCommandSettings";
 

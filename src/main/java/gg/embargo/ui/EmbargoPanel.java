@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import gg.embargo.DataManager;
+import gg.embargo.EmbargoConfig;
 import gg.embargo.EmbargoPlugin;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -55,6 +56,9 @@ public class EmbargoPanel extends PluginPanel {
     @Inject
     private ScheduledExecutorService executorService;
 
+    @Inject
+    private EmbargoConfig config;
+
     @Setter
     public boolean isLoggedIn = false;
 
@@ -105,6 +109,9 @@ public class EmbargoPanel extends PluginPanel {
     // Polls subsection
     private JPanel pollsPanel;
     private final Set<Integer> alertedPollIds = new HashSet<>();
+
+    // Of The Week event alerts
+    private final Set<Integer> alertedEventIds = new HashSet<>();
 
     @Inject
     private EmbargoPanel() {
@@ -468,6 +475,14 @@ public class EmbargoPanel extends PluginPanel {
 
             for (JsonObject event : ongoingEvents) {
                 addEventToPanel(ofTheWeekOngoingPanel, event, true);
+
+                // Alert user if this is a new ongoing event they haven't been alerted about
+                int eventId = event.has("wiseOldManId") ? event.get("wiseOldManId").getAsInt() :
+                              (event.has("id") ? event.get("id").getAsInt() : 0);
+                if (eventId > 0 && isLoggedIn && !alertedEventIds.contains(eventId)) {
+                    alertedEventIds.add(eventId);
+                    sendEventAlert(event);
+                }
             }
         }
 
@@ -710,6 +725,10 @@ public class EmbargoPanel extends PluginPanel {
             return;
         }
 
+        if (!config.enableBountyAlerts()) {
+            return;
+        }
+
         String name = bounty.get("name").getAsString();
         String target = name.replaceFirst("Bounty #\\d+ - ", "");
 
@@ -724,11 +743,12 @@ public class EmbargoPanel extends PluginPanel {
     }
 
     /**
-     * Clears the alerted bounty and poll IDs (call on logout to allow re-alerting on next login)
+     * Clears all alerted IDs (call on logout to allow re-alerting on next login)
      */
-    public void clearAlertedBounties() {
+    public void clearAlertedIds() {
         alertedBountyIds.clear();
         alertedPollIds.clear();
+        alertedEventIds.clear();
     }
 
     /**
@@ -840,6 +860,10 @@ public class EmbargoPanel extends PluginPanel {
             return;
         }
 
+        if (!config.enablePollAlerts()) {
+            return;
+        }
+
         String title = poll.has("title") ? poll.get("title").getAsString() : "New Poll";
 
         clientThread.invokeLater(() -> {
@@ -847,6 +871,35 @@ public class EmbargoPanel extends PluginPanel {
                     net.runelite.api.ChatMessageType.GAMEMESSAGE,
                     "",
                     "<col=ff9000>[Embargo]</col> New poll: <col=ffffff>" + title + "</col>! Check the side panel or Discord to vote.",
+                    null
+            );
+        });
+    }
+
+    /**
+     * Sends a chat message alert for an ongoing Of The Week event
+     */
+    private void sendEventAlert(JsonObject event) {
+        if (client == null || client.getGameState() != GameState.LOGGED_IN) {
+            return;
+        }
+
+        if (!config.enableEventAlerts()) {
+            return;
+        }
+
+        String name = event.has("name") ? event.get("name").getAsString() : "New Event";
+        // Shorten for chat message
+        String displayName = name
+                .replaceFirst("Boss Of The Week #\\d+\\s*\\|", "BOTW |")
+                .replaceFirst("Skill Of The Week #\\d+\\s*\\|", "SOTW |")
+                .trim();
+
+        clientThread.invokeLater(() -> {
+            client.addChatMessage(
+                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    "",
+                    "<col=ff9000>[Embargo]</col> New event: <col=ffffff>" + displayName + "</col>! Check the side panel for details.",
                     null
             );
         });
@@ -1217,6 +1270,9 @@ public class EmbargoPanel extends PluginPanel {
 
     public void logOut() {
         this.isLoggedIn = false;
+
+        // Clear alerted IDs so users get re-alerted on next login
+        clearAlertedIds();
 
         // Panel may not be initialized yet if logout event fires early
         if (loggedOutSection == null || accountInfoSection == null) {
