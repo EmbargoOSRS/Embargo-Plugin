@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import gg.embargo.DataManager;
+import gg.embargo.EmbargoConfig;
 import gg.embargo.EmbargoPlugin;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -22,10 +23,20 @@ import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.border.MatteBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class EmbargoPanel extends PluginPanel {
@@ -43,6 +54,12 @@ public class EmbargoPanel extends PluginPanel {
 
     @Inject
     private ClientThread clientThread;
+
+    @Inject
+    private ScheduledExecutorService executorService;
+
+    @Inject
+    private EmbargoConfig config;
 
     @Setter
     public boolean isLoggedIn = false;
@@ -69,6 +86,38 @@ public class EmbargoPanel extends PluginPanel {
             htmlLabel("Sign in to see what requirements", " you are missing for rank up"));
     private final Font smallFont = FontManager.getRunescapeSmallFont();
     final JPanel missingRequirementsContainer = new JPanel(new BorderLayout(5, 0));
+    private final JLabel missingItemCountLabel = new JLabel();
+    private boolean missingRequirementsCollapsed = false;
+    private JPanel missingRequirementsHeader;
+    private JPanel collapsibleContent;
+    private JLabel collapseIndicator;
+    private JPanel accountInfoSection;
+    private JPanel loggedOutSection;
+    private JLabel refreshButton;
+    private boolean refreshOnCooldown = false;
+    private static final int REFRESH_COOLDOWN_SECONDS = 30;
+
+    // Events section (contains Of The Week and Bounties subsections)
+    private JPanel eventsContainer;
+
+    // Of The Week subsection - dynamic panels for ongoing/upcoming
+    private JPanel ofTheWeekOngoingPanel;
+    private JPanel ofTheWeekUpcomingPanel;
+
+    // Bounties subsection - dynamic panel for multiple bounties
+    private JPanel bountiesListPanel;
+    private final Set<Integer> alertedBountyIds = new HashSet<>();
+
+    // Polls subsection
+    private JPanel pollsPanel;
+    private final Set<Integer> alertedPollIds = new HashSet<>();
+
+    // Of The Week event alerts
+    private final Set<Integer> alertedEventIds = new HashSet<>();
+
+    // Periodic refresh for events/bounties/polls
+    private static final int EVENTS_REFRESH_INTERVAL_MINUTES = 1;
+    private ScheduledFuture<?> eventsRefreshTask;
 
     @Inject
     private EmbargoPanel() {
@@ -79,67 +128,232 @@ public class EmbargoPanel extends PluginPanel {
                 + "</span></body></html>";
     }
 
+    /**
+     * Creates a styled label with smallFont, light gray color, and left alignment
+     */
+    private JLabel createSmallLabel(String text) {
+        JLabel label = new JLabel(text);
+        label.setFont(smallFont);
+        label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return label;
+    }
+
+    /**
+     * Creates a styled label with smallFont, specified color, and left alignment
+     */
+    private JLabel createSmallLabel(String text, Color color) {
+        JLabel label = new JLabel(text);
+        label.setFont(smallFont);
+        label.setForeground(color);
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return label;
+    }
+
+    /**
+     * Creates a section header label (bold, 12pt for main headers, 11pt for
+     * subsections)
+     */
+    private JLabel createHeader(String text, boolean isMain) {
+        JLabel header = new JLabel(text);
+        header.setFont(new Font("SansSerif", Font.BOLD, isMain ? 12 : 11));
+        header.setForeground(isMain ? Color.WHITE : ColorScheme.LIGHT_GRAY_COLOR);
+        header.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return header;
+    }
+
+    /**
+     * Creates a panel with vertical BoxLayout and dark background
+     */
+    private JPanel createVerticalPanel() {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return panel;
+    }
+
+    /**
+     * Makes a label clickable, opening the given URL on click
+     */
+    private void makeClickable(JLabel label, String url, String tooltip) {
+        label.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        label.setToolTipText(tooltip);
+        label.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                LinkBrowser.browse(url);
+            }
+        });
+    }
+
+    /**
+     * Formats minutes remaining into a human-readable string (e.g., "2d 5h", "3h
+     * 30m", "45 min")
+     */
+    private String formatTimeRemaining(long minutesRemaining) {
+        if (minutesRemaining > 1440) { // More than 24 hours
+            long days = minutesRemaining / 1440;
+            return days + "d " + ((minutesRemaining % 1440) / 60) + "h";
+        } else if (minutesRemaining > 60) {
+            long hours = minutesRemaining / 60;
+            return hours + "h " + (minutesRemaining % 60) + "m";
+        } else if (minutesRemaining > 0) {
+            return minutesRemaining + " min";
+        } else {
+            return "Ending soon";
+        }
+    }
+
+    /**
+     * Applies standard styling to a label (smallFont, light gray, left aligned)
+     */
+    private void styleLabel(JLabel label) {
+        label.setFont(smallFont);
+        label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+    }
+
     void setupVersionPanel() {
-        // Set up Embargo Clan Version at top of Version panel
-        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.4.8"));
-        version.setFont(smallFont);
-
-        // Set version's font
-        JLabel revision = new JLabel();
-        revision.setFont(smallFont);
-
-        // Set up versionPanel
+        // Set up versionPanel with BoxLayout for better control
         versionPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         versionPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
-        versionPanel.setLayout(new GridLayout(0, 1));
+        versionPanel.setLayout(new BoxLayout(versionPanel, BoxLayout.Y_AXIS));
 
-        // Set up custom embargo labels
-        isRegisteredWithClanLabel.setFont(smallFont);
-        isRegisteredWithClanLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        // Set up Embargo Clan Version at top of Version panel
+        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.0"));
+        version.setFont(smallFont);
+        version.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        embargoScoreLabel.setFont(smallFont);
-        embargoScoreLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-
-        accountScoreLabel.setFont(smallFont);
-        accountScoreLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-
-        communityScoreLabel.setFont(smallFont);
-        communityScoreLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-
-        currentCALabel.setFont(smallFont);
-        currentCALabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-
-        loggedLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        loggedLabel.setFont(smallFont);
-
-        currentRankLabel.setFont(smallFont);
-        currentRankLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        // Apply standard styling to all info labels
+        for (JLabel label : new JLabel[] { isRegisteredWithClanLabel, embargoScoreLabel, accountScoreLabel,
+                communityScoreLabel, currentCALabel, loggedLabel, currentRankLabel }) {
+            styleLabel(label);
+        }
 
         emailLabel.setForeground(Color.WHITE);
         emailLabel.setFont(smallFont);
 
         versionPanel.add(version);
-        versionPanel.add(Box.createGlue());
+        versionPanel.add(Box.createVerticalStrut(4));
         versionPanel.add(loggedLabel);
-        versionPanel.add(emailLabel);
-        versionPanel.add(isRegisteredWithClanLabel);
-        versionPanel.add(embargoScoreLabel);
-        versionPanel.add(accountScoreLabel);
-        versionPanel.add(communityScoreLabel);
-        versionPanel.add(currentCALabel);
+
+        // Create logged out section (shown when not logged in)
+        loggedOutSection = new JPanel();
+        loggedOutSection.setLayout(new BoxLayout(loggedOutSection, BoxLayout.Y_AXIS));
+        loggedOutSection.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        loggedOutSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+        loggedOutSection.add(emailLabel);
+
+        // Create account info section (shown when logged in)
+        accountInfoSection = new JPanel();
+        accountInfoSection.setLayout(new BoxLayout(accountInfoSection, BoxLayout.Y_AXIS));
+        accountInfoSection.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        accountInfoSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+        accountInfoSection.setVisible(false);
+
+        // Add separator before Account Info section
+        accountInfoSection.add(Box.createVerticalStrut(8));
+        JSeparator sep = createSeparator();
+        accountInfoSection.add(sep);
+        accountInfoSection.add(Box.createVerticalStrut(8));
+
+        // Add Account Info section header with refresh button
+        JPanel accountInfoHeaderPanel = new JPanel(new BorderLayout());
+        accountInfoHeaderPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        accountInfoHeaderPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        accountInfoHeaderPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+
+        JLabel accountInfoHeader = new JLabel("Account Info");
+        accountInfoHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
+        accountInfoHeader.setForeground(Color.WHITE);
+        accountInfoHeaderPanel.add(accountInfoHeader, BorderLayout.WEST);
+
+        // Refresh button
+        refreshButton = new JLabel("\u21BB"); // Refresh symbol
+        refreshButton.setFont(new Font("SansSerif", Font.BOLD, 14));
+        refreshButton.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        refreshButton.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        refreshButton.setToolTipText("Refresh account data");
+        refreshButton.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (!refreshOnCooldown) {
+                    refreshAccountData();
+                }
+            }
+
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                if (!refreshOnCooldown) {
+                    refreshButton.setForeground(Color.WHITE);
+                }
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                if (!refreshOnCooldown) {
+                    refreshButton.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+                }
+            }
+        });
+        accountInfoHeaderPanel.add(refreshButton, BorderLayout.EAST);
+
+        accountInfoSection.add(accountInfoHeaderPanel);
+        accountInfoSection.add(Box.createVerticalStrut(6));
+
+        accountInfoSection.add(isRegisteredWithClanLabel);
+        accountInfoSection.add(embargoScoreLabel);
+        accountInfoSection.add(accountScoreLabel);
+        accountInfoSection.add(communityScoreLabel);
+        accountInfoSection.add(currentRankLabel);
+        accountInfoSection.add(currentCALabel);
+
+        versionPanel.add(loggedOutSection);
+        versionPanel.add(accountInfoSection);
+    }
+
+    /**
+     * Creates a horizontal separator line
+     */
+    private JSeparator createSeparator() {
+        JSeparator separator = new JSeparator(SwingConstants.HORIZONTAL);
+        separator.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        separator.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        separator.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        separator.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return separator;
     }
 
     JPanel setUpQuickLinks() {
-        JPanel actionsContainer = new JPanel();
-        actionsContainer.setBorder(new EmptyBorder(10, 0, 0, 0));
-        actionsContainer.setLayout(new GridLayout(0, 1, 0, 10));
+        JPanel wrapper = new JPanel();
+        wrapper.setLayout(new BoxLayout(wrapper, BoxLayout.Y_AXIS));
+        wrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        wrapper.setBorder(BorderFactory.createCompoundBorder(
+                new MatteBorder(1, 0, 0, 0, ColorScheme.LIGHT_GRAY_COLOR),
+                new EmptyBorder(10, 10, 10, 10)));
 
-        actionsContainer.add(buildLinkPanel(DISCORD_ICON, "Join us on our", "Discord", "https://discord.gg/YDGGyP3VEq"));
+        // Links Header
+        JLabel linksHeader = new JLabel("Links");
+        linksHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
+        linksHeader.setForeground(Color.WHITE);
+        linksHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        wrapper.add(linksHeader);
+        wrapper.add(Box.createVerticalStrut(8));
+
+        JPanel actionsContainer = new JPanel();
+        actionsContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        actionsContainer.setLayout(new GridLayout(0, 1, 0, 8));
+        actionsContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        actionsContainer
+                .add(buildLinkPanel(DISCORD_ICON, "Join us on our", "Discord", "https://discord.gg/YDGGyP3VEq"));
         actionsContainer.add(buildLinkPanel(WEBSITE_ICON, "Go to our", "clan website", "https://embargo.gg/"));
         actionsContainer.add(buildLinkPanel(GITHUB_ICON, "Report a bug or", "inspect the plugin code",
-                "https://github.com/Sharpienero/Embargo-Plugin"));
+                "https://github.com/EmbargoOSRS/Embargo-Plugin"));
 
-        return actionsContainer;
+        wrapper.add(actionsContainer);
+        return wrapper;
     }
 
     void setupMissingItemsPanel() {
@@ -147,15 +361,26 @@ public class EmbargoPanel extends PluginPanel {
         missingRequirementsContainer.removeAll();
         missingRequirementsPanel.removeAll();
 
-        // Set up container styling
-        missingRequirementsContainer.setBorder(new EmptyBorder(7, 7, 7, 7));
+        // Set up container styling with top border as separator
+        missingRequirementsContainer.setBorder(BorderFactory.createCompoundBorder(
+                new MatteBorder(1, 0, 0, 0, ColorScheme.LIGHT_GRAY_COLOR),
+                new EmptyBorder(10, 10, 10, 10)));
         missingRequirementsContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         missingRequirementsContainer.setFont(FontManager.getRunescapeSmallFont());
         missingRequirementsContainer.setForeground(Color.WHITE);
+        missingRequirementsContainer.setLayout(new BorderLayout());
+
+        // Create collapsible header
+        missingRequirementsHeader = createMissingRequirementsHeader();
+        missingRequirementsContainer.add(missingRequirementsHeader, BorderLayout.NORTH);
+
+        // Set up collapsible content panel
+        collapsibleContent = new JPanel(new BorderLayout());
+        collapsibleContent.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
         // Set up panel styling
         missingRequirementsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        missingRequirementsPanel.setBorder(new EmptyBorder(10, 0, 10, 0));
+        missingRequirementsPanel.setBorder(new EmptyBorder(8, 0, 8, 0));
         missingRequirementsPanel.setLayout(new GridLayout(1, 1));
 
         // Always add the default message initially
@@ -165,18 +390,642 @@ public class EmbargoPanel extends PluginPanel {
         missingRequiredItemsLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         missingRequirementsPanel.add(missingRequiredItemsLabel);
 
-        // Add panel to container
-        missingRequirementsContainer.add(missingRequirementsPanel, BorderLayout.CENTER);
+        // Add panel to collapsible content
+        collapsibleContent.add(missingRequirementsPanel, BorderLayout.CENTER);
+
+        // Add collapsible content to container
+        missingRequirementsContainer.add(collapsibleContent, BorderLayout.CENTER);
 
         // Add container to main panel
         this.add(missingRequirementsContainer, BorderLayout.NORTH);
         this.revalidate();
     }
 
+    /**
+     * Sets up the Events section panel with Of The Week and Bounties subsections
+     */
+    void setupEventsPanel() {
+        eventsContainer = createVerticalPanel();
+        eventsContainer.setBorder(BorderFactory.createCompoundBorder(
+                new MatteBorder(1, 0, 0, 0, ColorScheme.LIGHT_GRAY_COLOR),
+                new EmptyBorder(10, 10, 10, 10)));
+
+        // Main Events Header
+        eventsContainer.add(createHeader("Events", true));
+        eventsContainer.add(Box.createVerticalStrut(8));
+
+        // === Of The Week Subsection ===
+        eventsContainer.add(createHeader("Of The Week", false));
+        eventsContainer.add(Box.createVerticalStrut(4));
+
+        ofTheWeekOngoingPanel = createVerticalPanel();
+        ofTheWeekOngoingPanel.add(createSmallLabel("Loading..."));
+        eventsContainer.add(ofTheWeekOngoingPanel);
+
+        ofTheWeekUpcomingPanel = createVerticalPanel();
+        ofTheWeekUpcomingPanel.setVisible(false);
+        eventsContainer.add(ofTheWeekUpcomingPanel);
+
+        eventsContainer.add(Box.createVerticalStrut(8));
+
+        // === Bounties Subsection ===
+        eventsContainer.add(createHeader("Bounties", false));
+        eventsContainer.add(Box.createVerticalStrut(4));
+
+        bountiesListPanel = createVerticalPanel();
+        bountiesListPanel.add(createSmallLabel("Loading..."));
+        eventsContainer.add(bountiesListPanel);
+
+        eventsContainer.add(Box.createVerticalStrut(8));
+
+        // === Polls Subsection ===
+        eventsContainer.add(createHeader("Polls", false));
+        eventsContainer.add(Box.createVerticalStrut(4));
+
+        pollsPanel = createVerticalPanel();
+        pollsPanel.add(createSmallLabel("Loading..."));
+        eventsContainer.add(pollsPanel);
+
+        // Fetch events, bounties, and polls
+        fetchAndUpdateEvents();
+        fetchAndUpdateBounties();
+        fetchAndUpdatePoll();
+    }
+
+    /**
+     * Fetches events from API and updates the Of The Week panel
+     */
+    private void fetchAndUpdateEvents() {
+        dataManager.getEventsAsync().thenAccept(response -> {
+            SwingUtilities.invokeLater(() -> {
+                updateOfTheWeekPanel(response);
+            });
+        });
+    }
+
+    private static final Color COLOR_GREEN = new Color(0x00, 0xc8, 0x00);
+    private static final Color COLOR_ORANGE = new Color(0xff, 0xc0, 0x00);
+
+    /**
+     * Updates the Of The Week panel with the API response
+     */
+    private void updateOfTheWeekPanel(JsonArray events) {
+        ofTheWeekOngoingPanel.removeAll();
+        ofTheWeekUpcomingPanel.removeAll();
+
+        if (events == null || events.size() == 0) {
+            ofTheWeekOngoingPanel.add(createSmallLabel("No events"));
+            ofTheWeekUpcomingPanel.setVisible(false);
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
+            return;
+        }
+
+        // Separate ongoing and upcoming events
+        java.util.List<JsonObject> ongoingEvents = new ArrayList<>();
+        java.util.List<JsonObject> upcomingEvents = new ArrayList<>();
+
+        for (JsonElement element : events) {
+            JsonObject event = element.getAsJsonObject();
+            boolean started = event.has("started") && event.get("started").getAsBoolean();
+            boolean completed = event.has("completed") && event.get("completed").getAsBoolean();
+
+            if (started && !completed) {
+                ongoingEvents.add(event);
+            } else if (!started && !completed) {
+                upcomingEvents.add(event);
+            }
+        }
+
+        // Display ongoing events
+        if (ongoingEvents.isEmpty()) {
+            ofTheWeekOngoingPanel.add(createSmallLabel("No ongoing events"));
+        } else {
+            ofTheWeekOngoingPanel.add(createSmallLabel("Ongoing", COLOR_GREEN));
+
+            for (JsonObject event : ongoingEvents) {
+                addEventToPanel(ofTheWeekOngoingPanel, event, true);
+
+                // Alert user if this is a new ongoing event they haven't been alerted about
+                int eventId = event.has("wiseOldManId") ? event.get("wiseOldManId").getAsInt()
+                        : (event.has("id") ? event.get("id").getAsInt() : 0);
+                if (eventId > 0 && isLoggedIn && !alertedEventIds.contains(eventId)) {
+                    alertedEventIds.add(eventId);
+                    sendEventAlert(event);
+                }
+            }
+        }
+
+        // Display upcoming events
+        if (!upcomingEvents.isEmpty()) {
+            ofTheWeekUpcomingPanel.add(Box.createVerticalStrut(6));
+            ofTheWeekUpcomingPanel.add(createSmallLabel("Upcoming", COLOR_ORANGE));
+
+            for (JsonObject event : upcomingEvents) {
+                addEventToPanel(ofTheWeekUpcomingPanel, event, false);
+            }
+            ofTheWeekUpcomingPanel.setVisible(true);
+        } else {
+            ofTheWeekUpcomingPanel.setVisible(false);
+        }
+
+        eventsContainer.revalidate();
+        eventsContainer.repaint();
+    }
+
+    /**
+     * Adds a single event entry to the given panel
+     */
+    private void addEventToPanel(JPanel panel, JsonObject event, boolean isOngoing) {
+        panel.add(Box.createVerticalStrut(4));
+
+        String name = event.has("name") ? event.get("name").getAsString() : "Unknown";
+        String metric = event.has("metric") ? event.get("metric").getAsString() : "";
+        int participants = event.has("participantCount") ? event.get("participantCount").getAsInt() : 0;
+        int eventId = event.has("wiseOldManId") ? event.get("wiseOldManId").getAsInt()
+                : (event.has("id") ? event.get("id").getAsInt() : 0);
+
+        // Shorten event name: "Boss Of The Week #X |" -> "BOTW |", "Skill Of The Week
+        // #X |" -> "SOTW |"
+        String displayName = name
+                .replaceFirst("Boss Of The Week #\\d+\\s*\\|", "BOTW |")
+                .replaceFirst("Skill Of The Week #\\d+\\s*\\|", "SOTW |")
+                .trim();
+
+        // Event name as clickable link
+        JLabel nameLabel = createSmallLabel(displayName, Color.WHITE);
+        if (eventId > 0) {
+            makeClickable(nameLabel, "https://embargo.gg/competition/" + eventId, "Click to view on embargo.gg");
+        }
+        panel.add(nameLabel);
+
+        // Metric (using "Metric:" as label since it could be skill or boss)
+        if (!metric.isEmpty()) {
+            String formattedMetric = metric.substring(0, 1).toUpperCase() + metric.substring(1).replace("_", " ");
+            JLabel metricLabel = new JLabel(htmlLabel("Metric:", " " + formattedMetric));
+            styleLabel(metricLabel);
+            panel.add(metricLabel);
+        }
+
+        // Participants (only for ongoing)
+        if (isOngoing) {
+            JLabel participantsLabel = new JLabel(htmlLabel("Participants:", " " + participants));
+            styleLabel(participantsLabel);
+            panel.add(participantsLabel);
+        }
+    }
+
+    /**
+     * Fetches bounties from API and updates the panel
+     */
+    private void fetchAndUpdateBounties() {
+        dataManager.getBountiesAsync().thenAccept(response -> {
+            SwingUtilities.invokeLater(() -> {
+                updateBountyPanel(response);
+            });
+        });
+    }
+
+    /**
+     * Updates the bounty panel with the API response
+     * Shows: ongoing bounty (if any) + 2 most recent completed bounties
+     */
+    private void updateBountyPanel(JsonObject response) {
+        bountiesListPanel.removeAll();
+
+        if (response == null || !response.has("bounties")) {
+            bountiesListPanel.add(createSmallLabel("No bounties"));
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
+            return;
+        }
+
+        JsonArray bounties = response.getAsJsonArray("bounties");
+        java.util.List<JsonObject> activeBounties = new ArrayList<>();
+        java.util.List<JsonObject> recentBounties = new ArrayList<>();
+
+        // Separate active and completed bounties
+        for (JsonElement element : bounties) {
+            JsonObject bounty = element.getAsJsonObject();
+            String status = bounty.has("status") ? bounty.get("status").getAsString() : "";
+
+            if ("active".equalsIgnoreCase(status)) {
+                activeBounties.add(bounty);
+            } else if ("completed".equalsIgnoreCase(status) || "expired".equalsIgnoreCase(status)) {
+                recentBounties.add(bounty);
+            }
+        }
+
+        boolean hasContent = false;
+
+        // Display active bounties first
+        if (!activeBounties.isEmpty()) {
+            hasContent = true;
+            bountiesListPanel.add(createSmallLabel("Active", COLOR_GREEN));
+
+            for (JsonObject activeBounty : activeBounties) {
+                addBountyToPanel(bountiesListPanel, activeBounty, true);
+
+                // Alert user if this is a new bounty they haven't been alerted about
+                int bountyId = activeBounty.get("id").getAsInt();
+                if (isLoggedIn && !alertedBountyIds.contains(bountyId)) {
+                    alertedBountyIds.add(bountyId);
+                    sendBountyAlert(activeBounty);
+                }
+            }
+        }
+
+        // Display up to 2 most recent completed bounties
+        if (!recentBounties.isEmpty()) {
+            if (hasContent) {
+                bountiesListPanel.add(Box.createVerticalStrut(6));
+            }
+
+            bountiesListPanel.add(createSmallLabel("Recent"));
+
+            int count = 0;
+            for (JsonObject bounty : recentBounties) {
+                if (count >= 2)
+                    break;
+                addBountyToPanel(bountiesListPanel, bounty, false);
+                count++;
+            }
+            hasContent = true;
+        }
+
+        if (!hasContent) {
+            bountiesListPanel.add(createSmallLabel("No bounties"));
+        }
+
+        eventsContainer.revalidate();
+        eventsContainer.repaint();
+    }
+
+    /**
+     * Adds a single bounty entry to the given panel
+     */
+    private void addBountyToPanel(JPanel panel, JsonObject bounty, boolean isActive) {
+        panel.add(Box.createVerticalStrut(4));
+
+        String name = bounty.has("name") ? bounty.get("name").getAsString() : "Unknown";
+        String target = name.replaceFirst("Bounty #\\d+ - ", "");
+        int bountyId = bounty.has("id") ? bounty.get("id").getAsInt() : 0;
+
+        // Target name as clickable link
+        JLabel targetLabel = createSmallLabel(target, Color.WHITE);
+        if (bountyId > 0) {
+            makeClickable(targetLabel, "https://embargo.gg/bounties/" + bountyId, "Click to view on embargo.gg");
+        }
+        panel.add(targetLabel);
+
+        // Time remaining (for active)
+        if (isActive && bounty.has("endTime")) {
+            try {
+                String endTimeStr = bounty.get("endTime").getAsString();
+                ZonedDateTime endTime = ZonedDateTime.parse(endTimeStr);
+                long minutesRemaining = Instant.now().until(endTime.toInstant(), ChronoUnit.MINUTES);
+
+                JLabel timeLabel = new JLabel(htmlLabel("Time left:", " " + formatTimeRemaining(minutesRemaining)));
+                styleLabel(timeLabel);
+                panel.add(timeLabel);
+            } catch (Exception e) {
+                // Skip time label if parsing fails
+            }
+        }
+    }
+
+    /**
+     * Sends a chat message alert for an active bounty
+     */
+    private void sendBountyAlert(JsonObject bounty) {
+        if (client == null || client.getGameState() != GameState.LOGGED_IN) {
+            return;
+        }
+
+        if (!config.enableBountyAlerts()) {
+            return;
+        }
+
+        String name = bounty.get("name").getAsString();
+        String target = name.replaceFirst("Bounty #\\d+ - ", "");
+
+        clientThread.invokeLater(() -> {
+            client.addChatMessage(
+                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    "",
+                    "<col=ff9000>[Embargo]</col> Active bounty: <col=ffffff>" + target
+                            + "</col>! Check the side panel for details.",
+                    null);
+        });
+    }
+
+    /**
+     * Clears all alerted IDs (call on logout to allow re-alerting on next login)
+     */
+    public void clearAlertedIds() {
+        alertedBountyIds.clear();
+        alertedPollIds.clear();
+        alertedEventIds.clear();
+    }
+
+    /**
+     * Starts the periodic background refresh for events, bounties, and polls.
+     * Runs every minute while the user is logged in.
+     */
+    private void startPeriodicEventsRefresh() {
+        // Cancel any existing task first
+        stopPeriodicEventsRefresh();
+
+        eventsRefreshTask = executorService.scheduleAtFixedRate(() -> {
+            if (isLoggedIn) {
+                log.debug("Periodic refresh: fetching events, bounties, and polls");
+                fetchAndUpdateEvents();
+                fetchAndUpdateBounties();
+                fetchAndUpdatePoll();
+            }
+        }, EVENTS_REFRESH_INTERVAL_MINUTES, EVENTS_REFRESH_INTERVAL_MINUTES, TimeUnit.MINUTES);
+    }
+
+    /**
+     * Stops the periodic background refresh for events, bounties, and polls.
+     */
+    private void stopPeriodicEventsRefresh() {
+        if (eventsRefreshTask != null && !eventsRefreshTask.isCancelled()) {
+            eventsRefreshTask.cancel(false);
+            eventsRefreshTask = null;
+        }
+    }
+
+    /**
+     * Fetches the last active poll from API and updates the panel
+     */
+    private void fetchAndUpdatePoll() {
+        dataManager.getLastPollAsync().thenAccept(response -> {
+            SwingUtilities.invokeLater(() -> {
+                updatePollPanel(response);
+            });
+        });
+    }
+
+    /**
+     * Updates the poll panel with the API response
+     */
+    private void updatePollPanel(JsonObject poll) {
+        pollsPanel.removeAll();
+
+        if (poll == null) {
+            pollsPanel.add(createSmallLabel("No active polls"));
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
+            return;
+        }
+
+        // Alert user if this is a new poll they haven't been alerted about
+        int pollId = poll.has("id") ? poll.get("id").getAsInt() : 0;
+        if (pollId > 0 && isLoggedIn && !alertedPollIds.contains(pollId)) {
+            alertedPollIds.add(pollId);
+            sendPollAlert(poll);
+        }
+
+        pollsPanel.add(Box.createVerticalStrut(4));
+        pollsPanel.add(createSmallLabel("Active", COLOR_GREEN));
+        pollsPanel.add(Box.createVerticalStrut(4));
+
+        // Poll title as clickable link
+        String title = poll.has("title") ? poll.get("title").getAsString() : "Unknown Poll";
+        String discordUrl = poll.has("discordUrl") ? poll.get("discordUrl").getAsString() : null;
+
+        JLabel titleLabel = createSmallLabel(title, Color.WHITE);
+        if (discordUrl != null && !discordUrl.isEmpty()) {
+            makeClickable(titleLabel, discordUrl, "Click to view poll on Discord");
+        }
+        pollsPanel.add(titleLabel);
+
+        // Time remaining
+        if (poll.has("endsAt")) {
+            try {
+                String endsAtStr = poll.get("endsAt").getAsString();
+                ZonedDateTime endsAt = ZonedDateTime.parse(endsAtStr);
+                long minutesRemaining = Instant.now().until(endsAt.toInstant(), ChronoUnit.MINUTES);
+
+                JLabel timeLabel = new JLabel(htmlLabel("Ends in:", " " + formatTimeRemaining(minutesRemaining)));
+                styleLabel(timeLabel);
+                pollsPanel.add(timeLabel);
+            } catch (Exception e) {
+                // Skip time label if parsing fails
+            }
+        }
+
+        eventsContainer.revalidate();
+        eventsContainer.repaint();
+    }
+
+    /**
+     * Sends a chat message alert for an active poll
+     */
+    private void sendPollAlert(JsonObject poll) {
+        if (client == null || client.getGameState() != GameState.LOGGED_IN) {
+            return;
+        }
+
+        if (!config.enablePollAlerts()) {
+            return;
+        }
+
+        String title = poll.has("title") ? poll.get("title").getAsString() : "New Poll";
+
+        clientThread.invokeLater(() -> {
+            client.addChatMessage(
+                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    "",
+                    "<col=ff9000>[Embargo]</col> New poll: <col=ffffff>" + title
+                            + "</col>! Check the side panel or Discord to vote.",
+                    null);
+        });
+    }
+
+    /**
+     * Sends a chat message alert for an ongoing Of The Week event
+     */
+    private void sendEventAlert(JsonObject event) {
+        if (client == null || client.getGameState() != GameState.LOGGED_IN) {
+            return;
+        }
+
+        if (!config.enableEventAlerts()) {
+            return;
+        }
+
+        String name = event.has("name") ? event.get("name").getAsString() : "New Event";
+        String metric = event.has("metric") ? event.get("metric").getAsString() : "";
+        String formattedMetric = metric.isEmpty() ? "Unknown"
+                : metric.substring(0, 1).toUpperCase() + metric.substring(1).replace("_", " ");
+
+        // Determine event type (BOTW or SOTW)
+        String eventType = name.contains("Boss") ? "BOTW" : "SOTW";
+
+        clientThread.invokeLater(() -> {
+            client.addChatMessage(
+                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    "",
+                    "<col=ff9000>[Embargo]</col> Active " + eventType + ": <col=ffffff>" + formattedMetric
+                            + "</col>. Check the side panel for details.",
+                    null);
+        });
+    }
+
+    /**
+     * Creates the collapsible header for missing requirements section
+     */
+    private JPanel createMissingRequirementsHeader() {
+        JPanel header = new JPanel(new BorderLayout());
+        header.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        header.setBorder(new EmptyBorder(0, 0, 8, 0));
+        header.setCursor(new Cursor(Cursor.HAND_CURSOR));
+
+        // Left side: title and collapse indicator
+        JPanel titlePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        titlePanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+        collapseIndicator = new JLabel("\u25BC "); // Down arrow
+        collapseIndicator.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        collapseIndicator.setFont(new Font("SansSerif", Font.PLAIN, 10));
+        titlePanel.add(collapseIndicator);
+
+        JLabel title = new JLabel("Missing Requirements");
+        title.setFont(new Font("SansSerif", Font.BOLD, 12));
+        title.setForeground(Color.WHITE);
+        titlePanel.add(title);
+
+        header.add(titlePanel, BorderLayout.WEST);
+
+        // Right side: item count
+        missingItemCountLabel.setFont(smallFont);
+        missingItemCountLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+        header.add(missingItemCountLabel, BorderLayout.EAST);
+
+        // Add click listener for collapse/expand
+        MouseAdapter collapseListener = new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                toggleMissingRequirementsCollapse();
+            }
+
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                header.setBackground(ColorScheme.DARKER_GRAY_HOVER_COLOR);
+                titlePanel.setBackground(ColorScheme.DARKER_GRAY_HOVER_COLOR);
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                header.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+                titlePanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+            }
+        };
+
+        header.addMouseListener(collapseListener);
+
+        return header;
+    }
+
+    /**
+     * Toggles the collapsed state of the missing requirements section
+     */
+    private void toggleMissingRequirementsCollapse() {
+        missingRequirementsCollapsed = !missingRequirementsCollapsed;
+        collapsibleContent.setVisible(!missingRequirementsCollapsed);
+        collapseIndicator.setText(missingRequirementsCollapsed ? "\u25B6 " : "\u25BC "); // Right arrow / Down arrow
+        missingRequirementsContainer.revalidate();
+        missingRequirementsContainer.repaint();
+    }
+
+    /**
+     * Updates the missing item count label
+     */
+    private void updateMissingItemCount(int count) {
+        if (count > 0) {
+            missingItemCountLabel.setText(count + " item" + (count != 1 ? "s" : ""));
+        } else {
+            missingItemCountLabel.setText("");
+        }
+    }
+
+    /**
+     * Refreshes account data from the server
+     */
+    private void refreshAccountData() {
+        if (client == null || client.getLocalPlayer() == null) {
+            return;
+        }
+
+        // Start cooldown
+        startRefreshCooldown();
+
+        // Show loading state for manual refresh
+        embargoScoreLabel.setText(htmlLabel("Embargo Score:", " Loading..."));
+        accountScoreLabel.setText(htmlLabel("Account Score:", " Loading..."));
+        communityScoreLabel.setText(htmlLabel("Community Score:", " Loading..."));
+        currentRankLabel.setText(htmlLabel("Current Rank:", " Loading..."));
+        currentCALabel.setText(htmlLabel("Current CA Tier:", " Loading..."));
+
+        // Clear existing missing items
+        missingRequirementsPanelX.clearItems();
+        updateMissingItemCount(0);
+
+        // Refresh events (includes Of The Week and Bounties)
+        fetchAndUpdateEvents();
+        fetchAndUpdateBounties();
+
+        // Force refresh by calling updateLoggedIn with scheduled=true
+        updateLoggedIn(true);
+    }
+
+    /**
+     * Starts the refresh cooldown timer
+     */
+    private void startRefreshCooldown() {
+        refreshOnCooldown = true;
+        refreshButton.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
+        refreshButton.setCursor(new Cursor(Cursor.DEFAULT_CURSOR));
+        refreshButton.setToolTipText("Refresh on cooldown...");
+
+        // Schedule cooldown end
+        executorService.schedule(() -> {
+            SwingUtilities.invokeLater(() -> {
+                refreshOnCooldown = false;
+                refreshButton.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+                refreshButton.setCursor(new Cursor(Cursor.HAND_CURSOR));
+                refreshButton.setToolTipText("Refresh account data");
+            });
+        }, REFRESH_COOLDOWN_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
     void addSidePanel() {
         // Add the panels to the side plugin
         this.add(versionPanel, BorderLayout.NORTH);
+
+        // Create center panel to hold missing requirements and events
+        JPanel centerWrapper = new JPanel();
+        centerWrapper.setLayout(new BoxLayout(centerWrapper, BoxLayout.Y_AXIS));
+        centerWrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+        // Setup and add missing items panel
         setupMissingItemsPanel();
+        missingRequirementsContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
+        missingRequirementsContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+
+        // Remove from NORTH (setupMissingItemsPanel adds it there) and add to wrapper
+        this.remove(missingRequirementsContainer);
+        centerWrapper.add(missingRequirementsContainer);
+
+        // Setup and add events panel (contains Of The Week and Bounties)
+        setupEventsPanel();
+        eventsContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
+        eventsContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, eventsContainer.getPreferredSize().height));
+        centerWrapper.add(eventsContainer);
+
+        this.add(centerWrapper, BorderLayout.CENTER);
         this.add(this.setUpQuickLinks(), BorderLayout.SOUTH);
     }
 
@@ -208,8 +1057,16 @@ public class EmbargoPanel extends PluginPanel {
         }
         if (!isLoggedIn || scheduled) {
             if (client != null && client.getLocalPlayer() != null) {
-                this.isLoggedIn = true;
                 var username = client.getLocalPlayer().getName();
+
+                // If username isn't available yet, bail out and let scheduled retry handle it
+                if (username == null || username.isEmpty()) {
+                    return;
+                }
+
+                // Only show loading state on first login, not on scheduled refreshes
+                boolean isFirstLogin = !this.isLoggedIn;
+                this.isLoggedIn = true;
 
                 loggedLabel.setText(htmlLabel("Signed in as ", " " + username));
 
@@ -220,16 +1077,26 @@ public class EmbargoPanel extends PluginPanel {
                     }
                 });
 
-                // remove "Sign in to send..."
-                versionPanel.remove(emailLabel);
+                // Toggle section visibility
+                loggedOutSection.setVisible(false);
+                accountInfoSection.setVisible(true);
 
-                // re-register labels with panel
-                versionPanel.add(isRegisteredWithClanLabel);
-                versionPanel.add(embargoScoreLabel);
-                versionPanel.add(accountScoreLabel);
-                versionPanel.add(communityScoreLabel);
-                versionPanel.add(currentRankLabel);
-                versionPanel.add(currentCALabel);
+                // Only show "Loading..." on first login
+                if (isFirstLogin) {
+                    // Refresh events (Of The Week and Bounties) on login
+                    fetchAndUpdateEvents();
+                    fetchAndUpdateBounties();
+                    fetchAndUpdatePoll();
+
+                    // Start periodic refresh for events/bounties/polls
+                    startPeriodicEventsRefresh();
+
+                    embargoScoreLabel.setText(htmlLabel("Embargo Score:", " Loading..."));
+                    accountScoreLabel.setText(htmlLabel("Account Score:", " Loading..."));
+                    communityScoreLabel.setText(htmlLabel("Community Score:", " Loading..."));
+                    currentRankLabel.setText(htmlLabel("Current Rank:", " Loading..."));
+                    currentCALabel.setText(htmlLabel("Current CA Tier:", " Loading..."));
+                }
 
                 isRegisteredWithClanLabel.setText(htmlLabel("Account registered:", " Yes"));
 
@@ -238,80 +1105,134 @@ public class EmbargoPanel extends PluginPanel {
                     // This code runs when the profile data is received
                     // We need to run UI updates on the client thread
                     clientThread.invokeLater(() -> {
-                        JsonElement currentAccountPoints = embargoProfileData.get("accountPoints");
-                        JsonElement currentCommunityPoints = embargoProfileData
-                                .getAsJsonPrimitive("communityPoints");
+                        // Check if profile data is valid before processing
+                        if (embargoProfileData == null) {
+                            return;
+                        }
 
-                        embargoScoreLabel.setText((htmlLabel("Embargo Score:", " " +
-                                (Integer.parseInt(String.valueOf(currentAccountPoints)) +
-                                        Integer.parseInt(String.valueOf(currentCommunityPoints))))));
+                        JsonElement currentAccountPoints = embargoProfileData.get("accountPoints");
+                        JsonElement currentCommunityPoints = embargoProfileData.get("communityPoints");
+
+                        // Parse points safely, defaulting to 0 if null
+                        int accountPoints = (currentAccountPoints != null && !currentAccountPoints.isJsonNull())
+                                ? currentAccountPoints.getAsInt()
+                                : 0;
+                        int communityPoints = (currentCommunityPoints != null && !currentCommunityPoints.isJsonNull())
+                                ? currentCommunityPoints.getAsInt()
+                                : 0;
+
+                        embargoScoreLabel.setText(htmlLabel("Embargo Score:", " " + (accountPoints + communityPoints)));
+                        accountScoreLabel.setText(htmlLabel("Account Score:", " " + accountPoints));
+                        communityScoreLabel.setText(htmlLabel("Community Score:", " " + communityPoints));
 
                         JsonElement getCurrentCAName = embargoProfileData.get("currentHighestCAName");
-                        accountScoreLabel.setText(htmlLabel("Account Score: ",
-                                String.valueOf(Integer.parseInt(String.valueOf(currentAccountPoints)))));
+                        JsonObject currentRank = embargoProfileData.getAsJsonObject("currentRank");
 
-                        communityScoreLabel.setText(htmlLabel("Community Score: ",
-                                String.valueOf(Integer.parseInt(String.valueOf(currentCommunityPoints)))));
+                        String currentRankDisplay = "N/A";
+                        if (currentRank != null) {
+                            JsonElement currentRankName = currentRank.get("name");
+                            if (currentRankName != null && !currentRankName.isJsonNull()) {
+                                currentRankDisplay = currentRankName.getAsString();
+                            }
+                        }
+                        currentRankLabel.setText(htmlLabel("Current Rank:", " " + currentRankDisplay));
+
+                        String displayCAName = "N/A";
+                        if (getCurrentCAName != null && !getCurrentCAName.isJsonNull()) {
+                            displayCAName = getCurrentCAName.getAsString().replace(" Combat Achievement", "");
+                        }
+                        currentCALabel.setText(htmlLabel("Current CA Tier:", " " + displayCAName));
 
                         JsonArray missingGearReqs = embargoProfileData.getAsJsonArray("missingGearRequirements");
                         JsonArray missingUntradableItemIdReqs = embargoProfileData
                                 .getAsJsonArray("missingUntradableItemIds");
 
-                        JsonObject currentRank = embargoProfileData.getAsJsonObject("currentRank");
-                        JsonElement currentRankName = currentRank.get("name");
-
-                        var currentRankDisplay = String.valueOf(currentRankName).replace("\"", "");
-                        currentRankLabel.setText(htmlLabel("Current Rank:", " " + currentRankDisplay));
-
-                        var displayCAName = String.valueOf(getCurrentCAName).replace("\"", "");
-                        displayCAName = displayCAName.replace(" Combat Achievement", "");
-
-                        currentCALabel.setText(htmlLabel("Current CA Tier:", " " + displayCAName));
-
                         ArrayList<String> alreadyProcessed = new ArrayList<>();
 
                         // Build out the missing requirements panel
                         if (missingGearReqs.size() > 0 || missingUntradableItemIdReqs.size() > 0) {
-                            for (JsonElement mi : missingGearReqs) {
-                                String itemName = mi.getAsString();
-                                alreadyProcessed.add(itemName);
-                                log.debug("Processing {} in missingGearReqs", itemName);
+                            // Process items off the client thread to avoid blocking chunk loading
+                            // Use executorService to perform all item ID lookups asynchronously
+                            executorService.execute(() -> {
+                                // Pre-resolve all item IDs off the client thread (these are blocking calls)
+                                java.util.List<Object[]> dynamicItemsData = new ArrayList<>();
+                                java.util.List<Object[]> regularItemsData = new ArrayList<>();
 
-                                if (itemName.contains("|")) {
-                                    // DynamicMissingItem: rotate between items every 3 seconds
-                                    String[] dynamicNames = itemName.split("\\|");
-                                    int[] itemIds = new int[dynamicNames.length];
-                                    for (int i = 0; i < dynamicNames.length; i++) {
-                                        itemIds[i] = missingRequirementsPanelX.findItemIdByName(dynamicNames[i].trim());
+                                for (JsonElement mi : missingGearReqs) {
+                                    String itemName = mi.getAsString();
+                                    alreadyProcessed.add(itemName);
+                                    log.debug("Processing {} in missingGearReqs", itemName);
+
+                                    if (itemName.contains("|")) {
+                                        // DynamicMissingItem: pre-resolve all item IDs
+                                        String[] dynamicNames = itemName.split("\\|");
+                                        int[] itemIds = new int[dynamicNames.length];
+                                        for (int i = 0; i < dynamicNames.length; i++) {
+                                            itemIds[i] = missingRequirementsPanelX
+                                                    .findItemIdByName(dynamicNames[i].trim());
+                                        }
+                                        dynamicItemsData.add(new Object[] { dynamicNames, itemIds });
+                                    } else {
+                                        // Regular item: pre-resolve item ID
+                                        int itemId = missingRequirementsPanelX.findItemIdByName(itemName);
+                                        regularItemsData.add(new Object[] { itemName, itemId });
                                     }
-                                    clientThread.invokeLater(() -> missingRequirementsPanelX
-                                            .addDynamicMissingItem(dynamicNames, itemIds, 3000));
-                                } else {
-                                    clientThread.invokeLater(() -> missingRequirementsPanelX.addMissingItem(itemName,
-                                            missingRequirementsPanelX.findItemIdByName(itemName)));
                                 }
-                            }
 
-                            for (JsonElement mu : missingUntradableItemIdReqs) {
-                                if (alreadyProcessed.contains(mu.getAsString())) {
-                                    log.debug("{} already added, skipping missingUntradableItemIdReqs",
-                                            mu.getAsString());
-                                    continue;
+                                java.util.List<Integer> untradableIds = new ArrayList<>();
+                                for (JsonElement mu : missingUntradableItemIdReqs) {
+                                    if (alreadyProcessed.contains(mu.getAsString())) {
+                                        log.debug("{} already added, skipping missingUntradableItemIdReqs",
+                                                mu.getAsString());
+                                        continue;
+                                    }
+                                    untradableIds.add(mu.getAsInt());
                                 }
-                                missingRequirementsPanelX.addMissingItem("", mu.getAsInt());
-                            }
 
-                            // Clear the panel first
-                            missingRequirementsPanel.removeAll();
+                                // Now add all items on the client thread with batching enabled
+                                clientThread.invokeLater(() -> {
+                                    // Begin batching to prevent multiple panel rebuilds
+                                    missingRequirementsPanelX.beginBatchUpdate();
 
-                            // Add only the missingRequirementsPanelX (not the label)
-                            missingRequirementsPanel.add(missingRequirementsPanelX);
+                                    try {
+                                        // Add all dynamic items
+                                        for (Object[] data : dynamicItemsData) {
+                                            String[] names = (String[]) data[0];
+                                            int[] ids = (int[]) data[1];
+                                            missingRequirementsPanelX.addDynamicMissingItem(names, ids, 3000);
+                                        }
 
-                            // Refresh the panel
-                            missingRequirementsPanel.revalidate();
-                            missingRequirementsPanel.repaint();
+                                        // Add all regular items
+                                        for (Object[] data : regularItemsData) {
+                                            String name = (String) data[0];
+                                            int id = (int) data[1];
+                                            missingRequirementsPanelX.addMissingItem(name, id);
+                                        }
+
+                                        // Add untradable items
+                                        for (int itemId : untradableIds) {
+                                            missingRequirementsPanelX.addMissingItem("", itemId);
+                                        }
+                                    } finally {
+                                        // End batching - this triggers a single panel rebuild
+                                        missingRequirementsPanelX.endBatchUpdate();
+                                    }
+
+                                    // Update the container panel
+                                    missingRequirementsPanel.removeAll();
+                                    missingRequirementsPanel.add(missingRequirementsPanelX);
+                                    missingRequirementsPanel.revalidate();
+                                    missingRequirementsPanel.repaint();
+
+                                    // Update item count
+                                    int totalItems = dynamicItemsData.size() + regularItemsData.size()
+                                            + untradableIds.size();
+                                    updateMissingItemCount(totalItems);
+                                });
+                            });
                         } else {
                             missingRequiredItemsLabel.setText(htmlLabel("Missing Requirements: ", "None"));
+                            updateMissingItemCount(0);
                         }
                     });
                 }).exceptionally(ex -> {
@@ -326,13 +1247,27 @@ public class EmbargoPanel extends PluginPanel {
     }
 
     public void logOut() {
-        // log.debug("inside of logOut()");
         this.isLoggedIn = false;
+
+        // Stop periodic refresh
+        stopPeriodicEventsRefresh();
+
+        // Clear alerted IDs so users get re-alerted on next login
+        clearAlertedIds();
+
+        // Panel may not be initialized yet if logout event fires early
+        if (loggedOutSection == null || accountInfoSection == null) {
+            return;
+        }
 
         // Update labels
         emailLabel.setContentType("text/html");
         emailLabel.setText("Sign in to send data to Embargo.");
         loggedLabel.setText("Not signed in");
+
+        // Toggle section visibility
+        loggedOutSection.setVisible(true);
+        accountInfoSection.setVisible(false);
 
         // Reset missing gear requirements
         missingRequiredItemsLabel
@@ -340,12 +1275,20 @@ public class EmbargoPanel extends PluginPanel {
         missingRequiredItemsLabel.setFont(smallFont);
         missingRequiredItemsLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         missingRequirementsPanelX.clearItems();
+        updateMissingItemCount(0);
 
-        // Rebuild missing requirements panel
-        missingRequirementsContainer.removeAll();
+        // Rebuild missing requirements panel content (preserve header)
         missingRequirementsPanel.removeAll();
         missingRequirementsPanel.add(missingRequiredItemsLabel);
-        missingRequirementsContainer.add(missingRequirementsPanel, BorderLayout.CENTER);
+
+        // Reset collapse state
+        missingRequirementsCollapsed = false;
+        if (collapseIndicator != null) {
+            collapseIndicator.setText("\u25BC "); // Down arrow
+        }
+        if (collapsibleContent != null) {
+            collapsibleContent.setVisible(true);
+        }
 
         // Set to NA
         isRegisteredWithClanLabel.setText(htmlLabel("Account registered:", " No"));
@@ -354,19 +1297,6 @@ public class EmbargoPanel extends PluginPanel {
         accountScoreLabel.setText(htmlLabel("Account Score:", " N/A"));
         communityScoreLabel.setText(htmlLabel("Community Score:", " N/A"));
         currentCALabel.setText(htmlLabel("Current TA Tier:", " N/A"));
-
-        // Rebuild version panel
-        versionPanel.remove(isRegisteredWithClanLabel);
-        versionPanel.remove(embargoScoreLabel);
-        versionPanel.remove(accountScoreLabel);
-        versionPanel.remove(communityScoreLabel);
-        versionPanel.remove(currentRankLabel);
-        versionPanel.remove(currentCALabel);
-
-        // Make sure email label is added
-        if (!containsComponent(versionPanel, emailLabel)) {
-            versionPanel.add(emailLabel);
-        }
 
         // Refresh UI
         versionPanel.revalidate();
@@ -379,18 +1309,8 @@ public class EmbargoPanel extends PluginPanel {
         this.repaint();
     }
 
-    // Helper method to check if a container contains a component
-    private boolean containsComponent(Container container, Component component) {
-        Component[] components = container.getComponents();
-        for (Component c : components) {
-            if (c.equals(component)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     public void reset() {
+        stopPeriodicEventsRefresh();
         eventBus.unregister(this);
         missingRequirementsPanelX.shutdown();
         this.updateLoggedIn(false);

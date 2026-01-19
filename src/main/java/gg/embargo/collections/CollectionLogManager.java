@@ -64,7 +64,8 @@ public class CollectionLogManager {
 
     // Limit playerDataMap size to prevent unbounded growth - LRU eviction
     private static final int MAX_PLAYER_DATA_CACHE_SIZE = 10;
-    private final Map<PlayerProfile, PlayerData> playerDataMap = new LinkedHashMap<PlayerProfile, PlayerData>(MAX_PLAYER_DATA_CACHE_SIZE, 0.75f, true) {
+    private final Map<PlayerProfile, PlayerData> playerDataMap = new LinkedHashMap<PlayerProfile, PlayerData>(
+            MAX_PLAYER_DATA_CACHE_SIZE, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<PlayerProfile, PlayerData> eldest) {
             return size() > MAX_PLAYER_DATA_CACHE_SIZE;
@@ -144,7 +145,7 @@ public class CollectionLogManager {
                 tickCollectionLogScriptFired + 2 < client.getTickCount()) {
             tickCollectionLogScriptFired = -1;
             if (manifestManager.getManifest() == null) {
-                client.addChatMessage(ChatMessageType.CONSOLE, "Embargo",
+                client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Embargo",
                         "Failed to sync collection log. Try restarting the Embargo plugin.", "Embargo");
                 return;
             }
@@ -267,6 +268,8 @@ public class CollectionLogManager {
             @Override
             public void onFailure(Call call, IOException e) {
                 log.debug("Failed to submit: ", e);
+                clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Embargo",
+                        "Failed to upload data to Embargo.", "Embargo"));
             }
 
             @Override
@@ -274,10 +277,14 @@ public class CollectionLogManager {
                 try (response) {
                     if (!response.isSuccessful()) {
                         log.debug("Failed to submit: {}", response.code());
+                        clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+                                "<col=ff9000>[Embargo]</col> Failed to upload collection log data.", null));
                         return;
                     }
                     merge(old, delta);
                     cyclesSinceSuccessfulCall = 0;
+                    clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+                            "<col=ff9000>[Embargo]</col> Collection log synced successfully.", null));
                 } finally {
                     response.close();
                 }

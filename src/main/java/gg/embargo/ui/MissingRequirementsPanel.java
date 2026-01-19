@@ -21,9 +21,11 @@ import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
@@ -52,7 +54,15 @@ public class MissingRequirementsPanel extends PluginPanel {
                     return size() > MAX_LETTER_ICON_CACHE_SIZE;
                 }
             });
-    private volatile boolean isUpdating = false;
+
+    // Cache for item name -> item ID lookups to avoid repeated itemManager.search() calls
+    private final Map<String, Integer> itemIdCache = new ConcurrentHashMap<>();
+
+    // Use AtomicBoolean to properly track update state across threads
+    private final AtomicBoolean isUpdating = new AtomicBoolean(false);
+
+    // Flag to support batched updates - when true, updatePanel() is deferred
+    private volatile boolean batchingUpdates = false;
 
     // Track scheduled futures for cleanup to prevent memory leaks
     private final List<ScheduledFuture<?>> scheduledFutures = Collections.synchronizedList(new ArrayList<>());
@@ -94,39 +104,31 @@ public class MissingRequirementsPanel extends PluginPanel {
         this.executorService = executorService;
 
         setLayout(new BorderLayout());
-        setBackground(ColorScheme.DARK_GRAY_COLOR);
-        setBorder(new EmptyBorder(10, 10, 10, 10));
+        setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        setBorder(new EmptyBorder(5, 0, 5, 0));
 
-        // Create title panel
-        add(createTitlePanel(), BorderLayout.NORTH);
-
-        // Create items container
-        itemsContainer = new JPanel();
-        itemsContainer.setLayout(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
-        itemsContainer.setBackground(ColorScheme.DARK_GRAY_COLOR);
-
-        JScrollPane scrollPane = new JScrollPane(itemsContainer);
-        scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        scrollPane.setBorder(null);
-        add(scrollPane, BorderLayout.CENTER);
-    }
-
-    private JPanel createTitlePanel() {
-        JPanel titlePanel = new JPanel(new BorderLayout());
-        titlePanel.setBorder(new EmptyBorder(0, 0, 10, 0));
-        titlePanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
-
-        JLabel title = new JLabel("Missing Requirements");
-        title.setForeground(Color.WHITE);
-        title.setFont(new Font("SansSerif", Font.BOLD, 16));
-        titlePanel.add(title, BorderLayout.NORTH);
+        // Create subtitle panel with instructions
+        JPanel subtitlePanel = new JPanel(new BorderLayout());
+        subtitlePanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        subtitlePanel.setBorder(new EmptyBorder(0, 0, 8, 0));
 
         JLabel subtitle = new JLabel("Hover for details, click to open wiki");
         subtitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        subtitle.setFont(new Font("SansSerif", Font.ITALIC, 10));
-        titlePanel.add(subtitle, BorderLayout.SOUTH);
+        subtitle.setFont(new Font("SansSerif", Font.BOLD, 10));
+        subtitlePanel.add(subtitle, BorderLayout.WEST);
 
-        return titlePanel;
+        add(subtitlePanel, BorderLayout.NORTH);
+
+        // Create items container with increased gap for better spacing
+        itemsContainer = new JPanel();
+        itemsContainer.setLayout(new GridLayout(0, ITEMS_PER_ROW, 4, 4));
+        itemsContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+        JScrollPane scrollPane = new JScrollPane(itemsContainer);
+        scrollPane.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        scrollPane.setBorder(null);
+        scrollPane.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        add(scrollPane, BorderLayout.CENTER);
     }
 
     /**
@@ -345,21 +347,50 @@ public class MissingRequirementsPanel extends PluginPanel {
             missingItems.clear();
             iconCache.clear();
             letterIconCache.clear();
+            itemIdCache.clear();
             itemsContainer.removeAll();
         }
     }
 
     /**
-     * Updates the panel with the current list of missing items
+     * Begins a batch update session. While batching is active, individual
+     * addMissingItem/addDynamicMissingItem calls will not trigger panel rebuilds.
+     * Call {@link #endBatchUpdate()} when done adding items to trigger a single rebuild.
+     */
+    public void beginBatchUpdate() {
+        synchronized (lock) {
+            batchingUpdates = true;
+        }
+    }
+
+    /**
+     * Ends a batch update session and triggers a single panel rebuild.
+     * This should be called after all items have been added via addMissingItem/addDynamicMissingItem.
+     */
+    public void endBatchUpdate() {
+        synchronized (lock) {
+            batchingUpdates = false;
+            updatePanel();
+        }
+    }
+
+    /**
+     * Updates the panel with the current list of missing items.
+     * Uses AtomicBoolean to properly track update state across threads.
      */
     private void updatePanel() {
-        if (isUpdating) {
-            return; // Prevent concurrent updates
+        // Skip updates if we're in batching mode
+        if (batchingUpdates) {
+            return;
         }
 
-        try {
-            isUpdating = true;
-            SwingUtilities.invokeLater(() -> {
+        // Use compareAndSet for thread-safe check-and-set
+        if (!isUpdating.compareAndSet(false, true)) {
+            return; // Another update is already in progress
+        }
+
+        SwingUtilities.invokeLater(() -> {
+            try {
                 synchronized (lock) {
                     // Cancel existing scheduled futures before rebuilding panels to prevent leaks
                     cancelAllScheduledFutures();
@@ -371,10 +402,11 @@ public class MissingRequirementsPanel extends PluginPanel {
                     revalidate();
                     repaint();
                 }
-            });
-        } finally {
-            isUpdating = false;
-        }
+            } finally {
+                // Reset the flag AFTER the work is done, inside the SwingUtilities.invokeLater
+                isUpdating.set(false);
+            }
+        });
     }
 
     /**
@@ -613,16 +645,26 @@ public class MissingRequirementsPanel extends PluginPanel {
     }
 
     /**
-     * Attempts to find an item ID by name using the ItemManager
+     * Attempts to find an item ID by name using the ItemManager.
+     * Results are cached to avoid repeated blocking searches.
      */
     public int findItemIdByName(String itemName) {
-        String searchName = itemName.replace("\"", "");
-        List<ItemPrice> itemPrices = itemManager.search(searchName);
-        if (itemPrices.isEmpty()) {
-            return -1;
+        String searchName = itemName.replace("\"", "").trim();
+
+        // Check cache first to avoid blocking search call
+        Integer cachedId = itemIdCache.get(searchName.toLowerCase());
+        if (cachedId != null) {
+            return cachedId;
         }
 
-        return itemPrices.get(0).getId();
+        // Perform the search (blocking call)
+        List<ItemPrice> itemPrices = itemManager.search(searchName);
+        int itemId = itemPrices.isEmpty() ? -1 : itemPrices.get(0).getId();
+
+        // Cache the result (including -1 for not found)
+        itemIdCache.put(searchName.toLowerCase(), itemId);
+
+        return itemId;
     }
 
     /**

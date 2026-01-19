@@ -45,7 +45,8 @@ public class ItemRenameManager {
             MenuAction.WIDGET_TARGET_ON_WIDGET);
 
     // Default item name remappings
-    private static final ImmutableMap<String, String> DEFAULT_ITEM_REMAP = ImmutableMap.<String, String>builder().build();
+    private static final ImmutableMap<String, String> DEFAULT_ITEM_REMAP = ImmutableMap.<String, String>builder()
+            .build();
 
     // Map for custom renamings
     private final Map<String, String> customItemRemap = new HashMap<>();
@@ -72,7 +73,7 @@ public class ItemRenameManager {
         }
 
         parseManifest();
-        
+
         MenuEntry entry = event.getMenuEntry();
         if (ITEM_MENU_ACTIONS.contains(entry.getType())) {
             remapMenuEntryText(entry, customItemRemap);
@@ -82,7 +83,8 @@ public class ItemRenameManager {
     public void startUp() {
         eventBus.register(this);
 
-        if (!featureEnabled()) return;
+        if (!featureEnabled())
+            return;
 
         setupMenuRenames();
         manifestManager.getLatestManifest(); // Fetch manifest on startup
@@ -99,7 +101,8 @@ public class ItemRenameManager {
     }
 
     public void parseManifest() {
-        if (manifestManager.getManifest().getItemRenames() == null || manifestManager.getManifest().getItemRenames().isEmpty()) {
+        if (manifestManager.getManifest().getItemRenames() == null
+                || manifestManager.getManifest().getItemRenames().isEmpty()) {
             if (!manifestFetchAttempted) {
                 log.debug("manifest.itemRenames is empty, attempting to refetch");
             }
@@ -118,18 +121,19 @@ public class ItemRenameManager {
     }
 
     /**
-     * Remaps a menu entry's text if the target matches an entry in the provided map.
+     * Remaps a menu entry's text if the target matches an entry in the provided
+     * map.
      * 
      * @param menuEntry The menu entry to modify
-     * @param map The map of item names to replacement item names
+     * @param map       The map of item names to replacement item names
      */
     private void remapMenuEntryText(MenuEntry menuEntry, Map<String, String> map) {
         String target = menuEntry.getTarget();
         String cleanTarget;
-        
+
         NPC npc = menuEntry.getNpc();
         cleanTarget = npc != null ? Text.removeTags(npc.getName()) : Text.removeTags(target);
-        
+
         String replacement = map.get(cleanTarget);
         if (replacement != null) {
             menuEntry.setTarget(target.replace(cleanTarget, replacement));

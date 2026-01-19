@@ -17,8 +17,8 @@ import javax.inject.Singleton;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
-
 
 @Slf4j
 @Singleton
@@ -38,11 +38,16 @@ public class UntrackableItemManager {
     @Inject
     private OkHttpClient okHttpClient;
 
+    @Inject
+    private ScheduledExecutorService executorService;
+
     private static final String UNTRACKABLE_ENDPOINT = "https://embargo.gg/api/untrackables";
 
-    // Limit size to prevent unbounded growth - LRU eviction for player loot timestamps
+    // Limit size to prevent unbounded growth - LRU eviction for player loot
+    // timestamps
     private static final int MAX_LOOT_TIME_CACHE_SIZE = 50;
-    private final Map<String, LocalDateTime> lastLootTime = new LinkedHashMap<String, LocalDateTime>(MAX_LOOT_TIME_CACHE_SIZE, 0.75f, true) {
+    private final Map<String, LocalDateTime> lastLootTime = new LinkedHashMap<String, LocalDateTime>(
+            MAX_LOOT_TIME_CACHE_SIZE, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, LocalDateTime> eldest) {
             return size() > MAX_LOOT_TIME_CACHE_SIZE;
@@ -66,7 +71,7 @@ public class UntrackableItemManager {
         IMBUED_ZAMORAK_MAX_CAPE_I(24233),
         IMBUED_GUTHIX_MAX_CAPE_I(24234),
 
-        //BINGO #1 ITEMS FOR START COUNTS
+        // BINGO #1 ITEMS FOR START COUNTS
         BEGINNER_REWARD_CASKET(23245),
         EASY_REWARD_CASKET(20546),
         MEDIUM_REWARD_CASKET(20545),
@@ -76,7 +81,6 @@ public class UntrackableItemManager {
 
         MOSSY_KEY(22374),
         GIANT_KEY(20754);
-
 
         private final int itemId;
 
@@ -94,34 +98,50 @@ public class UntrackableItemManager {
         } else {
             return;
         }
-        if (itemContainer != null && children != null) {
+        if (itemContainer == null || children == null) {
+            return;
+        }
 
-            //Convert itemMap to use manifest.untrackableItems (which is a list of integers) instead of hardcoded enum
-            var itemMap = Arrays.stream(UntrackableItems.values()).map(UntrackableItems::getItemId).collect(Collectors.toCollection(HashSet::new));
+        // Build the set of trackable item IDs once (small, constant size)
+        var itemMap = Arrays.stream(UntrackableItems.values()).map(UntrackableItems::getItemId)
+                .collect(Collectors.toCollection(HashSet::new));
+
+        // Quickly capture item data from widgets on client thread
+        int bankSize = Math.min(itemContainer.size(), children.length);
+        int[] itemIds = new int[bankSize];
+        int[] quantities = new int[bankSize];
+        for (int i = 0; i < bankSize; i++) {
+            Widget child = children[i];
+            itemIds[i] = child.getItemId();
+            quantities[i] = child.getItemQuantity();
+        }
+
+        // Process and send off the client thread to prevent stutter
+        executorService.execute(() -> {
             List<Integer> playerItems = new ArrayList<>();
-            java.util.Map<Integer, Integer> itemQuantities = new java.util.HashMap<>();
-            for (int i = 0; i < itemContainer.size(); ++i) {
+            Map<Integer, Integer> itemQuantities = new HashMap<>();
 
-                Widget child = children[i];
-                var currentItem = child.getItemId();
-                if (itemMap.contains(currentItem)) {
-                    playerItems.add(currentItem);
-                    int quantity = child.getItemQuantity();
-                    itemQuantities.put(currentItem, quantity);
+            for (int i = 0; i < itemIds.length; i++) {
+                if (itemMap.contains(itemIds[i])) {
+                    playerItems.add(itemIds[i]);
+                    itemQuantities.put(itemIds[i], quantities[i]);
                 }
             }
 
-            var RequestBody = new FormBody.Builder();
-            for (int i=0; i < playerItems.size(); i++) {
-                RequestBody.add("itemIds[" + i + "]", String.valueOf(playerItems.get(i)));
-                RequestBody.add("quantities[" + i + "]", String.valueOf(itemQuantities.get(playerItems.get(i))));
+            if (playerItems.isEmpty()) {
+                return;
             }
 
-            RequestBody.add("username", username);
+            var requestBody = new FormBody.Builder();
+            for (int i = 0; i < playerItems.size(); i++) {
+                requestBody.add("itemIds[" + i + "]", String.valueOf(playerItems.get(i)));
+                requestBody.add("quantities[" + i + "]", String.valueOf(itemQuantities.get(playerItems.get(i))));
+            }
+            requestBody.add("username", username);
 
             Request request = new Request.Builder()
                     .url(UNTRACKABLE_ENDPOINT)
-                    .post(RequestBody.build())
+                    .post(requestBody.build())
                     .addHeader("Content-Type", "application/json")
                     .build();
 
@@ -143,7 +163,7 @@ public class UntrackableItemManager {
             } catch (IllegalArgumentException e) {
                 log.error("Bad URL given: {}", e.getLocalizedMessage());
             }
-        }
+        });
     }
 
     public void startUp() {

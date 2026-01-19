@@ -117,7 +117,10 @@ public class DataManager {
         PREPARE_RAID("raid"),
         UPLOAD_CLOG("collectionlog"),
         MINIGAME_COMPLETE("minigame"),
-        GET_MEMBER_INFO("embargo-profile");
+        GET_MEMBER_INFO("embargo-profile"),
+        BOUNTIES("bounties"),
+        EVENTS("events"),
+        LAST_POLL("lastpoll");
 
         APIRoutes(String route) {
             this.route = route;
@@ -144,6 +147,9 @@ public class DataManager {
     private static final String MINIGAME_COMPLETION_ENDPOINT = API_URI + APIRoutes.MINIGAME_COMPLETE;
     private static final String CLOG_UNLOCK_ENDPOINT = API_URI + APIRoutes.UPLOAD_CLOG;
     private static final String GET_MEMBER_INFO_ENDPOINT = API_URI + APIRoutes.GET_MEMBER_INFO;
+    private static final String BOUNTIES_ENDPOINT = API_URI + APIRoutes.BOUNTIES;
+    private static final String EVENTS_ENDPOINT = API_URI + APIRoutes.EVENTS;
+    private static final String LAST_POLL_ENDPOINT = API_URI + APIRoutes.LAST_POLL;
 
     // Boss list from API - use volatile for thread safety and instance field for proper cleanup
     private volatile List<String> bossesToTrack = null;
@@ -192,7 +198,9 @@ public class DataManager {
                     if (response.isSuccessful() && response.body() != null) {
                         String json = response.body().string();
                         // Parse as List<String> with proper type safety
-                        List<String> parsed = gson.fromJson(json, new com.google.gson.reflect.TypeToken<List<String>>(){}.getType());
+                        List<String> parsed = gson.fromJson(json,
+                                new com.google.gson.reflect.TypeToken<List<String>>() {
+                                }.getType());
                         if (parsed != null) {
                             bossesToTrack = parsed;
                         }
@@ -339,25 +347,36 @@ public class DataManager {
     }
 
     public CompletableFuture<JsonObject> getProfileAsync(String username, boolean isMemberInfoCall) {
-        CompletableFuture<JsonObject> future = new CompletableFuture<>();
-        Request request = null;
+        String endpoint = isMemberInfoCall
+                ? GET_MEMBER_INFO_ENDPOINT + '/' + username
+                : GET_PROFILE_ENDPOINT + '/' + username;
+        return fetchJsonAsync(endpoint, JsonObject.class, new JsonObject(), false);
+    }
 
-        if (isMemberInfoCall) {
-            request = new Request.Builder()
-                    .url(GET_MEMBER_INFO_ENDPOINT + '/' + username)
-                    .get()
-                    .build();
-        } else {
-            request = new Request.Builder()
-                    .url(GET_PROFILE_ENDPOINT + '/' + username)
-                    .get()
-                    .build();
-        }
+    /**
+     * Generic helper method to fetch JSON data from an API endpoint asynchronously
+     *
+     * @param endpoint     The API endpoint URL
+     * @param type         The class type to parse the response into (JsonObject.class or JsonArray.class)
+     * @param defaultValue The default value to return on failure or empty response
+     * @param allowNull    Whether to treat null/empty responses as valid (returns null instead of defaultValue)
+     * @param <T>          The type of JSON element (JsonObject or JsonArray)
+     * @return CompletableFuture containing the parsed JSON response
+     */
+    private <T extends JsonElement> CompletableFuture<T> fetchJsonAsync(
+            String endpoint, Class<T> type, T defaultValue, boolean allowNull) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+
+        Request request = new Request.Builder()
+                .url(endpoint)
+                .get()
+                .build();
 
         okHttpClient.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                future.complete(new JsonObject()); // Complete with empty object on failure
+                log.debug("Failed to fetch from {}: {}", endpoint, e.getMessage());
+                future.complete(allowNull ? null : defaultValue);
             }
 
             @Override
@@ -366,15 +385,46 @@ public class DataManager {
                     BufferedSource source = response.body().source();
                     String json = source.readUtf8();
                     response.close();
-                    future.complete(gson.fromJson(json, JsonObject.class));
+                    if (allowNull && (json == null || json.equals("null") || json.isEmpty())) {
+                        future.complete(null);
+                    } else {
+                        future.complete(gson.fromJson(json, type));
+                    }
                 } else {
                     response.close();
-                    future.complete(new JsonObject()); // Complete with empty object on unsuccessful response
+                    future.complete(allowNull ? null : defaultValue);
                 }
             }
         });
 
         return future;
+    }
+
+    /**
+     * Fetches bounties from the API asynchronously
+     *
+     * @return CompletableFuture containing the bounties JSON response
+     */
+    public CompletableFuture<JsonObject> getBountiesAsync() {
+        return fetchJsonAsync(BOUNTIES_ENDPOINT, JsonObject.class, new JsonObject(), false);
+    }
+
+    /**
+     * Fetches events from the API asynchronously
+     *
+     * @return CompletableFuture containing the events JSON array response
+     */
+    public CompletableFuture<JsonArray> getEventsAsync() {
+        return fetchJsonAsync(EVENTS_ENDPOINT, JsonArray.class, new JsonArray(), false);
+    }
+
+    /**
+     * Fetches the last active poll from the API asynchronously
+     *
+     * @return CompletableFuture containing the poll JSON object, or null if no active poll
+     */
+    public CompletableFuture<JsonObject> getLastPollAsync() {
+        return fetchJsonAsync(LAST_POLL_ENDPOINT, JsonObject.class, null, true);
     }
 
     private final AtomicBoolean apiFailureMode = new AtomicBoolean(false);
@@ -383,6 +433,7 @@ public class DataManager {
 
     /**
      * Checks if a user is registered with Embargo asynchronously
+     * 
      * @param username The username to check
      * @param callback Callback to handle the result
      */
@@ -438,7 +489,8 @@ public class DataManager {
                         if (response.isSuccessful()) {
                             String responseBody = response.body().string();
                             JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
-                            if (jsonResponse != null && jsonResponse.has("message") && "registered".equals(jsonResponse.get("message").getAsString())) {
+                            if (jsonResponse != null && jsonResponse.has("message")
+                                    && "registered".equals(jsonResponse.get("message").getAsString())) {
                                 log.debug("{} is registered, return true", username);
                                 isUsernameRegistered.set(true);
                                 callback.accept(true);
@@ -452,7 +504,8 @@ public class DataManager {
                         } else {
                             String responseBody = response.body().string();
                             JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
-                            if (jsonResponse != null && jsonResponse.has("message") && "not registered".equals(jsonResponse.get("message").getAsString())) {
+                            if (jsonResponse != null && jsonResponse.has("message")
+                                    && "not registered".equals(jsonResponse.get("message").getAsString())) {
                                 stopTryingForAccount.set(true);
                                 callback.accept(false);
                                 return;
@@ -479,7 +532,6 @@ public class DataManager {
             callback.accept(false);
         }
     }
-
 
     public void uploadLoot(LootReceived event) {
         JsonObject payload = getJsonObject(event);
@@ -651,7 +703,8 @@ public class DataManager {
     }
 
     protected void submitToAPI() {
-        if (!hasDataToPush() || client.getLocalPlayer() == null || client.getLocalPlayer().getName() == null || stopTryingForAccount.get())
+        if (!hasDataToPush() || client.getLocalPlayer() == null || client.getLocalPlayer().getName() == null
+                || stopTryingForAccount.get())
             return;
 
         if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD)
@@ -662,40 +715,41 @@ public class DataManager {
                 return;
             }
 
-        if (client.getGameState() == GameState.LOGIN_SCREEN || client.getGameState() == GameState.HOPPING) {
-            return;
-        }
+            if (client.getGameState() == GameState.LOGIN_SCREEN || client.getGameState() == GameState.HOPPING) {
+                return;
+            }
 
-        try {
-            JsonObject payload = convertToJson();
+            try {
+                JsonObject payload = convertToJson();
 
-            okHttpClient.newCall(new Request.Builder().url(UNTRACKABLE_POST_ENDPOINT)
-                    .post(RequestBody.create(JSON, payload.toString())).build()).enqueue(new Callback() {
-                        @Override
-                        public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                            log.error(e.getLocalizedMessage());
-                            restoreData(payload);
-                            log.error("Failed to submit player in submitToAPI, restoring data. Cause of failure:", e);
-                        }
-
-                        @Override
-                        public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                            if (response.isSuccessful()) {
-                                log.debug("Successfully uploaded untrackable items");
-                                response.close();
-                                return;
-                            } else {
-                                response.close();
-                                log.error("submitToAPI onResponse returned, but without success");
+                okHttpClient.newCall(new Request.Builder().url(UNTRACKABLE_POST_ENDPOINT)
+                        .post(RequestBody.create(JSON, payload.toString())).build()).enqueue(new Callback() {
+                            @Override
+                            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                                log.error(e.getLocalizedMessage());
+                                restoreData(payload);
+                                log.error("Failed to submit player in submitToAPI, restoring data. Cause of failure:",
+                                        e);
                             }
 
-                            response.close();
-                        }
-                    });
-        } catch (Exception e) {
-            log.error("Error preparing data for API submission", e);
-        }
-    });
+                            @Override
+                            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                                if (response.isSuccessful()) {
+                                    log.debug("Successfully uploaded untrackable items");
+                                    response.close();
+                                    return;
+                                } else {
+                                    response.close();
+                                    log.error("submitToAPI onResponse returned, but without success");
+                                }
+
+                                response.close();
+                            }
+                        });
+            } catch (Exception e) {
+                log.error("Error preparing data for API submission", e);
+            }
+        });
     }
 
     private HashSet<Integer> parseSet(JsonArray j) {
