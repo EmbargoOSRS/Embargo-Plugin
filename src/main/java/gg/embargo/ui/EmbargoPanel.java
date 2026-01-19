@@ -151,7 +151,8 @@ public class EmbargoPanel extends PluginPanel {
     }
 
     /**
-     * Creates a section header label (bold, 12pt for main headers, 11pt for subsections)
+     * Creates a section header label (bold, 12pt for main headers, 11pt for
+     * subsections)
      */
     private JLabel createHeader(String text, boolean isMain) {
         JLabel header = new JLabel(text);
@@ -187,7 +188,8 @@ public class EmbargoPanel extends PluginPanel {
     }
 
     /**
-     * Formats minutes remaining into a human-readable string (e.g., "2d 5h", "3h 30m", "45 min")
+     * Formats minutes remaining into a human-readable string (e.g., "2d 5h", "3h
+     * 30m", "45 min")
      */
     private String formatTimeRemaining(long minutesRemaining) {
         if (minutesRemaining > 1440) { // More than 24 hours
@@ -224,8 +226,8 @@ public class EmbargoPanel extends PluginPanel {
         version.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         // Apply standard styling to all info labels
-        for (JLabel label : new JLabel[]{isRegisteredWithClanLabel, embargoScoreLabel, accountScoreLabel,
-                communityScoreLabel, currentCALabel, loggedLabel, currentRankLabel}) {
+        for (JLabel label : new JLabel[] { isRegisteredWithClanLabel, embargoScoreLabel, accountScoreLabel,
+                communityScoreLabel, currentCALabel, loggedLabel, currentRankLabel }) {
             styleLabel(label);
         }
 
@@ -344,7 +346,8 @@ public class EmbargoPanel extends PluginPanel {
         actionsContainer.setLayout(new GridLayout(0, 1, 0, 8));
         actionsContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        actionsContainer.add(buildLinkPanel(DISCORD_ICON, "Join us on our", "Discord", "https://discord.gg/YDGGyP3VEq"));
+        actionsContainer
+                .add(buildLinkPanel(DISCORD_ICON, "Join us on our", "Discord", "https://discord.gg/YDGGyP3VEq"));
         actionsContainer.add(buildLinkPanel(WEBSITE_ICON, "Go to our", "clan website", "https://embargo.gg/"));
         actionsContainer.add(buildLinkPanel(GITHUB_ICON, "Report a bug or", "inspect the plugin code",
                 "https://github.com/EmbargoOSRS/Embargo-Plugin"));
@@ -504,8 +507,8 @@ public class EmbargoPanel extends PluginPanel {
                 addEventToPanel(ofTheWeekOngoingPanel, event, true);
 
                 // Alert user if this is a new ongoing event they haven't been alerted about
-                int eventId = event.has("wiseOldManId") ? event.get("wiseOldManId").getAsInt() :
-                              (event.has("id") ? event.get("id").getAsInt() : 0);
+                int eventId = event.has("wiseOldManId") ? event.get("wiseOldManId").getAsInt()
+                        : (event.has("id") ? event.get("id").getAsInt() : 0);
                 if (eventId > 0 && isLoggedIn && !alertedEventIds.contains(eventId)) {
                     alertedEventIds.add(eventId);
                     sendEventAlert(event);
@@ -539,10 +542,11 @@ public class EmbargoPanel extends PluginPanel {
         String name = event.has("name") ? event.get("name").getAsString() : "Unknown";
         String metric = event.has("metric") ? event.get("metric").getAsString() : "";
         int participants = event.has("participantCount") ? event.get("participantCount").getAsInt() : 0;
-        int eventId = event.has("wiseOldManId") ? event.get("wiseOldManId").getAsInt() :
-                      (event.has("id") ? event.get("id").getAsInt() : 0);
+        int eventId = event.has("wiseOldManId") ? event.get("wiseOldManId").getAsInt()
+                : (event.has("id") ? event.get("id").getAsInt() : 0);
 
-        // Shorten event name: "Boss Of The Week #X |" -> "BOTW |", "Skill Of The Week #X |" -> "SOTW |"
+        // Shorten event name: "Boss Of The Week #X |" -> "BOTW |", "Skill Of The Week
+        // #X |" -> "SOTW |"
         String displayName = name
                 .replaceFirst("Boss Of The Week #\\d+\\s*\\|", "BOTW |")
                 .replaceFirst("Skill Of The Week #\\d+\\s*\\|", "SOTW |")
@@ -641,7 +645,8 @@ public class EmbargoPanel extends PluginPanel {
 
             int count = 0;
             for (JsonObject bounty : recentBounties) {
-                if (count >= 2) break;
+                if (count >= 2)
+                    break;
                 addBountyToPanel(bountiesListPanel, bounty, false);
                 count++;
             }
@@ -708,9 +713,9 @@ public class EmbargoPanel extends PluginPanel {
             client.addChatMessage(
                     net.runelite.api.ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> Active bounty: <col=ffffff>" + target + "</col>! Check the side panel for details.",
-                    null
-            );
+                    "<col=ff9000>[Embargo]</col> Active bounty: <col=ffffff>" + target
+                            + "</col>! Check the side panel for details.",
+                    null);
         });
     }
 
@@ -833,9 +838,9 @@ public class EmbargoPanel extends PluginPanel {
             client.addChatMessage(
                     net.runelite.api.ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> New poll: <col=ffffff>" + title + "</col>! Check the side panel or Discord to vote.",
-                    null
-            );
+                    "<col=ff9000>[Embargo]</col> New poll: <col=ffffff>" + title
+                            + "</col>! Check the side panel or Discord to vote.",
+                    null);
         });
     }
 
@@ -852,19 +857,20 @@ public class EmbargoPanel extends PluginPanel {
         }
 
         String name = event.has("name") ? event.get("name").getAsString() : "New Event";
-        // Shorten for chat message
-        String displayName = name
-                .replaceFirst("Boss Of The Week #\\d+\\s*\\|", "BOTW |")
-                .replaceFirst("Skill Of The Week #\\d+\\s*\\|", "SOTW |")
-                .trim();
+        String metric = event.has("metric") ? event.get("metric").getAsString() : "";
+        String formattedMetric = metric.isEmpty() ? "Unknown"
+                : metric.substring(0, 1).toUpperCase() + metric.substring(1).replace("_", " ");
+
+        // Determine event type (BOTW or SOTW)
+        String eventType = name.contains("Boss") ? "BOTW" : "SOTW";
 
         clientThread.invokeLater(() -> {
             client.addChatMessage(
                     net.runelite.api.ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> Active OTW event found: <col=ffffff>" + displayName + "</col>. Check the side panel for details.",
-                    null
-            );
+                    "<col=ff9000>[Embargo]</col> Active " + eventType + ": <col=ffffff>" + formattedMetric
+                            + "</col>. Check the side panel for details.",
+                    null);
         });
     }
 
@@ -1109,9 +1115,11 @@ public class EmbargoPanel extends PluginPanel {
 
                         // Parse points safely, defaulting to 0 if null
                         int accountPoints = (currentAccountPoints != null && !currentAccountPoints.isJsonNull())
-                                ? currentAccountPoints.getAsInt() : 0;
+                                ? currentAccountPoints.getAsInt()
+                                : 0;
                         int communityPoints = (currentCommunityPoints != null && !currentCommunityPoints.isJsonNull())
-                                ? currentCommunityPoints.getAsInt() : 0;
+                                ? currentCommunityPoints.getAsInt()
+                                : 0;
 
                         embargoScoreLabel.setText(htmlLabel("Embargo Score:", " " + (accountPoints + communityPoints)));
                         accountScoreLabel.setText(htmlLabel("Account Score:", " " + accountPoints));
@@ -1160,13 +1168,14 @@ public class EmbargoPanel extends PluginPanel {
                                         String[] dynamicNames = itemName.split("\\|");
                                         int[] itemIds = new int[dynamicNames.length];
                                         for (int i = 0; i < dynamicNames.length; i++) {
-                                            itemIds[i] = missingRequirementsPanelX.findItemIdByName(dynamicNames[i].trim());
+                                            itemIds[i] = missingRequirementsPanelX
+                                                    .findItemIdByName(dynamicNames[i].trim());
                                         }
-                                        dynamicItemsData.add(new Object[]{dynamicNames, itemIds});
+                                        dynamicItemsData.add(new Object[] { dynamicNames, itemIds });
                                     } else {
                                         // Regular item: pre-resolve item ID
                                         int itemId = missingRequirementsPanelX.findItemIdByName(itemName);
-                                        regularItemsData.add(new Object[]{itemName, itemId});
+                                        regularItemsData.add(new Object[] { itemName, itemId });
                                     }
                                 }
 
@@ -1216,7 +1225,8 @@ public class EmbargoPanel extends PluginPanel {
                                     missingRequirementsPanel.repaint();
 
                                     // Update item count
-                                    int totalItems = dynamicItemsData.size() + regularItemsData.size() + untradableIds.size();
+                                    int totalItems = dynamicItemsData.size() + regularItemsData.size()
+                                            + untradableIds.size();
                                     updateMissingItemCount(totalItems);
                                 });
                             });
