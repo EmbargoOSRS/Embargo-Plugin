@@ -258,22 +258,31 @@ public class EmbargoPanel extends PluginPanel {
 
     JPanel setUpQuickLinks() {
         JPanel wrapper = new JPanel();
-        wrapper.setLayout(new BorderLayout());
+        wrapper.setLayout(new BoxLayout(wrapper, BoxLayout.Y_AXIS));
         wrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         wrapper.setBorder(BorderFactory.createCompoundBorder(
                 new MatteBorder(1, 0, 0, 0, ColorScheme.LIGHT_GRAY_COLOR),
-                new EmptyBorder(10, 0, 0, 0)));
+                new EmptyBorder(10, 10, 10, 10)));
+
+        // Links Header
+        JLabel linksHeader = new JLabel("Links");
+        linksHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
+        linksHeader.setForeground(Color.WHITE);
+        linksHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        wrapper.add(linksHeader);
+        wrapper.add(Box.createVerticalStrut(8));
 
         JPanel actionsContainer = new JPanel();
         actionsContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         actionsContainer.setLayout(new GridLayout(0, 1, 0, 8));
+        actionsContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         actionsContainer.add(buildLinkPanel(DISCORD_ICON, "Join us on our", "Discord", "https://discord.gg/YDGGyP3VEq"));
         actionsContainer.add(buildLinkPanel(WEBSITE_ICON, "Go to our", "clan website", "https://embargo.gg/"));
         actionsContainer.add(buildLinkPanel(GITHUB_ICON, "Report a bug or", "inspect the plugin code",
                 "https://github.com/EmbargoOSRS/Embargo-Plugin"));
 
-        wrapper.add(actionsContainer, BorderLayout.CENTER);
+        wrapper.add(actionsContainer);
         return wrapper;
     }
 

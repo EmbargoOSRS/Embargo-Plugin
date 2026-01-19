@@ -20,12 +20,19 @@ The plugin currently sends the following to Embargo's servers:
     * Barrows gloves
     * Imbued god capes (sara, guthix, zamorak (max/imbued max capes included))
 * Collection log items + quantity when Embargo button inside of Collection Log panel is pressed
- 
+
 
 ## Other features
+## Alerts
+Get alerted in real time of:
+* Skill Of The Week/Boss Of The Week event starting/ending
+* New polls for the next skill/boss of the week
+* New bounties to hunt
+
 ### Clan member raid board highlighting: 
 
 Config settings:
+
 ![Config settings](resources/highlight-settings.png)
 
 TOB:
@@ -37,5 +44,5 @@ TOA:
 ![TOA Image2](resources/toa-highlight2.png)
 
 Collection Log:
-![Collection Log Image](resources/collecton-log-panel.png)
+![Collection Log Image](resources/collection-log-panel.png)
 
