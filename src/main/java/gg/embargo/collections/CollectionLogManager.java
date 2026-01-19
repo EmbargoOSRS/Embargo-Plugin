@@ -277,14 +277,14 @@ public class CollectionLogManager {
                 try (response) {
                     if (!response.isSuccessful()) {
                         log.debug("Failed to submit: {}", response.code());
-                        clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.CONSOLE, "Embargo",
-                                "Failed to upload data to Embargo.", "Embargo"));
+                        clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+                                "<col=ff9000>[Embargo]</col> Failed to upload collection log data.", null));
                         return;
                     }
                     merge(old, delta);
                     cyclesSinceSuccessfulCall = 0;
-                    clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.CONSOLE, "Embargo",
-                            "Done uploading data to Embargo.", "Embargo"));
+                    clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+                            "<col=ff9000>[Embargo]</col> Collection log synced successfully.", null));
                 } finally {
                     response.close();
                 }

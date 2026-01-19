@@ -21,61 +21,43 @@
  * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Thanks to RuneProfile (https://github.com/ReinhardtR/runeprofile-plugin) for Hamburger Button logic
  */
 
 package gg.embargo.ui;
 
 import com.google.inject.Inject;
+import gg.embargo.EmbargoConfig;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
-import net.runelite.api.annotations.Component;
-import net.runelite.api.events.ScriptPostFired;
-import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.*;
-import net.runelite.client.callback.ClientThread;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
+
+import java.util.*;
+
+import static java.lang.Math.round;
 
 @Slf4j
 public class SyncButtonManager {
 
-    private static final int COLLECTION_LOG_SETUP = 7797;
-    private static final int[] SPRITE_IDS_INACTIVE = {
-            SpriteID.DIALOG_BACKGROUND,
-            SpriteID.WORLD_MAP_BUTTON_METAL_CORNER_TOP_LEFT,
-            SpriteID.WORLD_MAP_BUTTON_METAL_CORNER_TOP_RIGHT,
-            SpriteID.WORLD_MAP_BUTTON_METAL_CORNER_BOTTOM_LEFT,
-            SpriteID.WORLD_MAP_BUTTON_METAL_CORNER_BOTTOM_RIGHT,
-            SpriteID.WORLD_MAP_BUTTON_EDGE_LEFT,
-            SpriteID.WORLD_MAP_BUTTON_EDGE_TOP,
-            SpriteID.WORLD_MAP_BUTTON_EDGE_RIGHT,
-            SpriteID.WORLD_MAP_BUTTON_EDGE_BOTTOM,
-    };
-
-    private static final int[] SPRITE_IDS_ACTIVE = {
-            SpriteID.RESIZEABLE_MODE_SIDE_PANEL_BACKGROUND,
-            SpriteID.EQUIPMENT_BUTTON_METAL_CORNER_TOP_LEFT_HOVERED,
-            SpriteID.EQUIPMENT_BUTTON_METAL_CORNER_TOP_RIGHT_HOVERED,
-            SpriteID.EQUIPMENT_BUTTON_METAL_CORNER_BOTTOM_LEFT_HOVERED,
-            SpriteID.EQUIPMENT_BUTTON_METAL_CORNER_BOTTOM_RIGHT_HOVERED,
-            SpriteID.EQUIPMENT_BUTTON_EDGE_LEFT_HOVERED,
-            SpriteID.EQUIPMENT_BUTTON_EDGE_TOP_HOVERED,
-            SpriteID.EQUIPMENT_BUTTON_EDGE_RIGHT_HOVERED,
-            SpriteID.EQUIPMENT_BUTTON_EDGE_BOTTOM_HOVERED,
-    };
-
-    private static final int FONT_COLOUR_INACTIVE = 0xd6d6d6;
-    private static final int FONT_COLOUR_ACTIVE = 0xffffff;
-    private static final int CLOSE_BUTTON_OFFSET = 28;
-    private static final int BUTTON_WIDTH = 71;
-    private static final int BUTTON_OFFSET = CLOSE_BUTTON_OFFSET + 5;
+    private static final int DRAW_BURGER_MENU = 7812;
+    private static final int FONT_COLOR = 0xFF981F;
+    private static final int FONT_COLOR_ACTIVE = 0xFFFFFF;
+    private static final String BUTTON_TEXT = "Embargo";
+    private static final int COOLDOWN_TICKS = 50; // ~30 seconds
 
     private final Client client;
-    private final ClientThread clientThread;
     private final EventBus eventBus;
+    private final EmbargoConfig config;
+
+    private int baseMenuHeight = -1;
+    private int lastAttemptedSync = -1;
 
     @Getter
     @Setter
@@ -84,206 +66,141 @@ public class SyncButtonManager {
     @Inject
     private SyncButtonManager(
             Client client,
-            ClientThread clientThread,
-            EventBus eventBus
-    )
-    {
+            EventBus eventBus,
+            EmbargoConfig config) {
         this.client = client;
-        this.clientThread = clientThread;
         this.eventBus = eventBus;
+        this.config = config;
     }
 
-    public void startUp()
-    {
+    public void startUp() {
         setSyncAllowed(false);
         eventBus.register(this);
-        clientThread.invokeLater(() -> tryAddButton(this::onButtonClick));
     }
 
-    public void shutDown()
-    {
+    public void shutDown() {
         eventBus.unregister(this);
-        clientThread.invokeLater(this::removeButton);
     }
 
-    @Getter
-    @RequiredArgsConstructor
-    enum Screen
-    {
-        // First number is col log container (inner) and second is search button id
-        COLLECTION_LOG(40697944, 40697932, InterfaceID.Collection.INFINITY),
-        ;
-
-        @Getter(onMethod_ = @Component)
-        private final int parentId;
-
-        @Getter(onMethod_ = @Component)
-        private final int searchButtonId;
-
-        @Getter(onMethod_ = @Component)
-        private final int collectionLogContainer;
-    }
-
-    void tryAddButton(Runnable onClick)
-    {
-        for (Screen screen : Screen.values())
-        {
-            addButton(screen, onClick);
-        }
-    }
     @Subscribe
-    public void onScriptPostFired(ScriptPostFired scriptPostFired)
-    {
-        if (scriptPostFired.getScriptId() == COLLECTION_LOG_SETUP)
-        {
-            removeButton();
-            addButton(Screen.COLLECTION_LOG, this::onButtonClick);
-        }
-    }
-
-    void onButtonClick() {
-        setSyncAllowed(true);
-        client.menuAction(-1, 40697932, MenuAction.CC_OP, 1, -1, "Search", null);
-        client.runScript(2240);
-        client.addChatMessage(ChatMessageType.CONSOLE, "Embargo", "Your collection log data is being sent to Embargo...", "Embargo");
-    }
-
-    void addButton(Screen screen, Runnable onClick)
-    {
-        Widget parent = client.getWidget(screen.getParentId());
-        Widget searchButton = client.getWidget(screen.getSearchButtonId());
-        Widget collectionLogContainer = client.getWidget(screen.getCollectionLogContainer());
-        Widget[] containerChildren;
-        Widget draggableTopbar;
-        if (parent == null || searchButton == null || collectionLogContainer == null ||
-                (containerChildren = collectionLogContainer.getChildren()) == null ||
-                (draggableTopbar = containerChildren[0]) == null)
-        {
+    public void onScriptPreFired(ScriptPreFired event) {
+        if (!config.showCollectionLogSyncButton() || event.getScriptId() != DRAW_BURGER_MENU) {
             return;
         }
 
-        final int w = BUTTON_WIDTH;
-        final int h = searchButton.getOriginalHeight();
-        final int x = BUTTON_OFFSET;
-        final int y = searchButton.getOriginalY();
-        final int cornerDim = 9;
+        Object[] args = event.getScriptEvent().getArguments();
+        int menuId = (int) args[3];
 
-        final Widget[] spriteWidgets = new Widget[9];
-
-        spriteWidgets[0] = parent.createChild(-1, WidgetType.GRAPHIC)
-                .setSpriteId(SPRITE_IDS_INACTIVE[0])
-                .setPos(x, y)
-                .setSize(w, h)
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setYPositionMode(searchButton.getYPositionMode());
-
-        spriteWidgets[1] = parent.createChild(-1, WidgetType.GRAPHIC)
-                .setSpriteId(SPRITE_IDS_INACTIVE[1])
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setSize(cornerDim, cornerDim)
-                .setPos(x + (w - cornerDim), y);
-        spriteWidgets[2] = parent.createChild(-1, WidgetType.GRAPHIC)
-                .setSpriteId(SPRITE_IDS_INACTIVE[2])
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setSize(cornerDim, cornerDim)
-                .setPos(x, y);
-        spriteWidgets[3] = parent.createChild(-1, WidgetType.GRAPHIC)
-                .setSpriteId(SPRITE_IDS_INACTIVE[3])
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setSize(cornerDim, cornerDim)
-                .setPos(x + (w - cornerDim), y + h - cornerDim);
-        spriteWidgets[4] = parent.createChild(-1, WidgetType.GRAPHIC)
-                .setSpriteId(SPRITE_IDS_INACTIVE[4])
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setSize(cornerDim, cornerDim)
-                .setPos(x, y + h - cornerDim);
-        // Left and right edges
-        int sideWidth = 9;
-        int sideHeight = 4;
-        spriteWidgets[5] = parent.createChild(-1, WidgetType.GRAPHIC)
-                .setSpriteId(SPRITE_IDS_INACTIVE[5])
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setSize(sideWidth, sideHeight)
-                .setPos(x + (w - sideWidth), y + cornerDim);
-        spriteWidgets[7] = parent.createChild(-1, WidgetType.GRAPHIC)
-                .setSpriteId(SPRITE_IDS_INACTIVE[7])
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setSize(sideWidth, sideHeight)
-                .setPos(x, y + cornerDim);
-
-        // Top and bottom edges
-        int topWidth = 53;
-        int topHeight = 9;
-        spriteWidgets[6] = parent.createChild(-1, WidgetType.GRAPHIC)
-                .setSpriteId(SPRITE_IDS_INACTIVE[6])
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setSize(topWidth, topHeight)
-                .setPos(x + cornerDim, y);
-        spriteWidgets[8] = parent.createChild(-1, WidgetType.GRAPHIC)
-                .setSpriteId(SPRITE_IDS_INACTIVE[8])
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setSize(topWidth, topHeight)
-                .setPos(x + cornerDim, y + h - topHeight);
-        for (int i = 0; i < 9; i++)
-        {
-            spriteWidgets[i].revalidate();
+        try {
+            log.debug("Adding Embargo button to burger menu with ID: {}", menuId);
+            addButton(menuId, this::onButtonClick);
+        } catch (Exception e) {
+            log.debug("Failed to add Embargo button to menu: {}", e.getMessage());
         }
-
-        final Widget text = parent.createChild(-1, WidgetType.TEXT)
-                .setText("Embargo")
-                .setTextColor(FONT_COLOUR_INACTIVE)
-                .setFontId(FontID.PLAIN_11)
-                .setTextShadowed(true)
-                .setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT)
-                .setXTextAlignment(WidgetTextAlignment.CENTER)
-                .setYTextAlignment(WidgetTextAlignment.CENTER)
-                .setPos(x, y)
-                .setSize(w, h)
-                .setYPositionMode(searchButton.getYPositionMode());
-        text.revalidate();
-
-        // We'll give the text layer the listeners since it covers the whole area
-        text.setHasListener(true);
-        text.setOnMouseOverListener((JavaScriptCallback) ev ->
-        {
-            for (int i = 0; i <= 8; i++)
-            {
-                spriteWidgets[i].setSpriteId(SPRITE_IDS_ACTIVE[i]);
-            }
-            text.setTextColor(FONT_COLOUR_ACTIVE);
-        });
-        text.setOnMouseLeaveListener((JavaScriptCallback) ev ->
-        {
-            for (int i = 0; i <= 8; i++)
-            {
-                spriteWidgets[i].setSpriteId(SPRITE_IDS_INACTIVE[i]);
-            }
-            text.setTextColor(FONT_COLOUR_INACTIVE);
-        });
-
-        // Register a click listener
-        text.setAction(0, "Sync your collection log with Embargo");
-        text.setOnOpListener((JavaScriptCallback) ev -> onClick.run());
-
-
-        // Shrink the top bar to avoid overlapping the new button
-        draggableTopbar.setOriginalWidth(draggableTopbar.getOriginalWidth() - (w + (x - CLOSE_BUTTON_OFFSET)));
-        draggableTopbar.revalidate();
-
-        // recompute locations / sizes on parent
-        parent.revalidate();
     }
 
-    void removeButton()
-    {
-        for (Screen screen : Screen.values())
-        {
-            Widget parent = client.getWidget(screen.getParentId());
-            if (parent != null)
-            {
-                parent.deleteAllChildren();
-                parent.revalidate();
-            }
+    private void onButtonClick() {
+        // Check cooldown
+        if (lastAttemptedSync != -1 && lastAttemptedSync + COOLDOWN_TICKS > client.getTickCount()) {
+            int ticksRemaining = lastAttemptedSync + COOLDOWN_TICKS - client.getTickCount();
+            int secondsRemaining = (int) round(ticksRemaining * 0.6);
+            client.addChatMessage(
+                    ChatMessageType.GAMEMESSAGE,
+                    "",
+                    "<col=ff9000>[Embargo]</col> Sync on cooldown. Try again in " + secondsRemaining + " seconds.",
+                    null);
+            return;
+        }
+        lastAttemptedSync = client.getTickCount();
+
+        // Set sync allowed flag and trigger search to iterate collection log
+        setSyncAllowed(true);
+        client.menuAction(-1, 40697932, MenuAction.CC_OP, 1, -1, "Search", null);
+        client.runScript(2240);
+
+        client.addChatMessage(
+                ChatMessageType.GAMEMESSAGE,
+                "",
+                "<col=ff9000>[Embargo]</col> Syncing your collection log...",
+                null);
+    }
+
+    private void addButton(int menuId, Runnable onClick) throws NullPointerException, NoSuchElementException {
+        // Disallow syncing from the adventure log to prevent players from syncing
+        // while viewing other players' collection logs via the POH adventure log
+        boolean isOpenedFromAdventureLog = client.getVarbitValue(VarbitID.COLLECTION_POH_HOST_BOOK_OPEN) == 1;
+        if (isOpenedFromAdventureLog) {
+            return;
+        }
+
+        Widget menu = Objects.requireNonNull(client.getWidget(menuId));
+        Widget[] menuChildren = Objects.requireNonNull(menu.getChildren());
+
+        if (baseMenuHeight == -1) {
+            baseMenuHeight = menu.getOriginalHeight();
+        }
+
+        // Find the last rectangle and text widgets to copy their styling
+        List<Widget> reversedMenuChildren = new ArrayList<>(Arrays.asList(menuChildren));
+        Collections.reverse(reversedMenuChildren);
+
+        Widget lastRectangle = reversedMenuChildren.stream()
+                .filter(w -> w.getType() == WidgetType.RECTANGLE)
+                .findFirst()
+                .orElseThrow(() -> new NoSuchElementException("No RECTANGLE widget found in menu"));
+
+        Widget lastText = reversedMenuChildren.stream()
+                .filter(w -> w.getType() == WidgetType.TEXT)
+                .findFirst()
+                .orElseThrow(() -> new NoSuchElementException("No TEXT widget found in menu"));
+
+        final int buttonHeight = lastRectangle.getHeight();
+        final int buttonY = lastRectangle.getOriginalY() + buttonHeight;
+
+        // Check if button already exists
+        final boolean existingButton = Arrays.stream(menuChildren)
+                .anyMatch(w -> w.getText().equals(BUTTON_TEXT));
+
+        if (!existingButton) {
+            // Create background rectangle matching the existing menu style
+            final Widget background = menu.createChild(WidgetType.RECTANGLE)
+                    .setOriginalWidth(lastRectangle.getOriginalWidth())
+                    .setOriginalHeight(lastRectangle.getOriginalHeight())
+                    .setOriginalX(lastRectangle.getOriginalX())
+                    .setOriginalY(buttonY)
+                    .setOpacity(lastRectangle.getOpacity())
+                    .setFilled(lastRectangle.isFilled());
+            background.revalidate();
+
+            // Create text widget with hover effects
+            final Widget text = menu.createChild(WidgetType.TEXT)
+                    .setText(BUTTON_TEXT)
+                    .setTextColor(FONT_COLOR)
+                    .setFontId(lastText.getFontId())
+                    .setTextShadowed(lastText.getTextShadowed())
+                    .setOriginalWidth(lastText.getOriginalWidth())
+                    .setOriginalHeight(lastText.getOriginalHeight())
+                    .setOriginalX(lastText.getOriginalX())
+                    .setOriginalY(buttonY)
+                    .setXTextAlignment(lastText.getXTextAlignment())
+                    .setYTextAlignment(lastText.getYTextAlignment());
+
+            text.setHasListener(true);
+            text.setOnMouseOverListener((JavaScriptCallback) ev -> text.setTextColor(FONT_COLOR_ACTIVE));
+            text.setOnMouseLeaveListener((JavaScriptCallback) ev -> text.setTextColor(FONT_COLOR));
+            text.setAction(0, "Sync your collection log with Embargo");
+            text.setOnOpListener((JavaScriptCallback) ev -> onClick.run());
+            text.revalidate();
+        }
+
+        // Expand the menu height to accommodate the new button
+        if (menu.getOriginalHeight() <= baseMenuHeight) {
+            menu.setOriginalHeight(menu.getOriginalHeight() + buttonHeight);
+        }
+
+        menu.revalidate();
+        for (Widget child : menuChildren) {
+            child.revalidate();
         }
     }
 }
