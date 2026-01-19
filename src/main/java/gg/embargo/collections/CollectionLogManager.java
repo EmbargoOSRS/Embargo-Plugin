@@ -145,7 +145,7 @@ public class CollectionLogManager {
                 tickCollectionLogScriptFired + 2 < client.getTickCount()) {
             tickCollectionLogScriptFired = -1;
             if (manifestManager.getManifest() == null) {
-                client.addChatMessage(ChatMessageType.CONSOLE, "Embargo",
+                client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Embargo",
                         "Failed to sync collection log. Try restarting the Embargo plugin.", "Embargo");
                 return;
             }
@@ -268,7 +268,7 @@ public class CollectionLogManager {
             @Override
             public void onFailure(Call call, IOException e) {
                 log.debug("Failed to submit: ", e);
-                clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.CONSOLE, "Embargo",
+                clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Embargo",
                         "Failed to upload data to Embargo.", "Embargo"));
             }
 
