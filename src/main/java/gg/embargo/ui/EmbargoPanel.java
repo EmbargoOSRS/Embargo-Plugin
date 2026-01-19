@@ -862,7 +862,7 @@ public class EmbargoPanel extends PluginPanel {
             client.addChatMessage(
                     net.runelite.api.ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> Active OTW event: <col=ffffff>" + displayName + "</col>! Check the side panel for details.",
+                    "<col=ff9000>[Embargo]</col> Active OTW event found: <col=ffffff>" + displayName + "</col>. Check the side panel for details.",
                     null
             );
         });
