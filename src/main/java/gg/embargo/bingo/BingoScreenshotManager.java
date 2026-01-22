@@ -9,13 +9,18 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.ui.DrawManager;
 import okhttp3.*;
 
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageOutputStream;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Base64;
+import java.util.Iterator;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -35,8 +40,11 @@ public class BingoScreenshotManager {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    // Maximum image dimension (resize if larger)
-    private static final int MAX_IMAGE_DIMENSION = 1920;
+    // Maximum image dimension (resize if larger) - reduced to keep uploads small
+    private static final int MAX_IMAGE_DIMENSION = 1280;
+
+    // JPEG quality for compression (0.0 - 1.0)
+    private static final float JPEG_QUALITY = 0.75f;
 
     // Queue for rate limiting uploads
     private static final int MAX_CONCURRENT_UPLOADS = 2;
@@ -216,11 +224,41 @@ public class BingoScreenshotManager {
     }
 
     /**
-     * Converts a BufferedImage to PNG bytes.
+     * Converts a BufferedImage to compressed JPEG bytes.
+     * Uses JPEG compression to reduce file size for uploads.
      */
     private byte[] toBytes(BufferedImage image) throws IOException {
+        // Ensure image is in RGB format (JPEG doesn't support alpha)
+        BufferedImage rgbImage = image;
+        if (image.getType() != BufferedImage.TYPE_INT_RGB) {
+            rgbImage = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
+            rgbImage.getGraphics().drawImage(image, 0, 0, null);
+        }
+
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ImageIO.write(image, "png", baos);
+
+        // Get JPEG writer
+        Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpg");
+        if (!writers.hasNext()) {
+            // Fallback to PNG if no JPEG writer available
+            ImageIO.write(rgbImage, "png", baos);
+            return baos.toByteArray();
+        }
+
+        ImageWriter writer = writers.next();
+        try (ImageOutputStream ios = ImageIO.createImageOutputStream(baos)) {
+            writer.setOutput(ios);
+
+            // Set compression quality
+            ImageWriteParam param = writer.getDefaultWriteParam();
+            param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            param.setCompressionQuality(JPEG_QUALITY);
+
+            writer.write(null, new IIOImage(rgbImage, null, null), param);
+        } finally {
+            writer.dispose();
+        }
+
         return baos.toByteArray();
     }
 
@@ -240,9 +278,12 @@ public class BingoScreenshotManager {
             payload.addProperty("tileId", tileId);
             payload.addProperty("screenshotBase64", screenshotBase64);
 
+            String payloadStr = payload.toString();
+            log.debug("Uploading screenshot: {} bytes (image: {} bytes)", payloadStr.length(), imageBytes.length);
+
             Request request = new Request.Builder()
                     .url(SCREENSHOT_ENDPOINT)
-                    .post(RequestBody.create(JSON, payload.toString()))
+                    .post(RequestBody.create(JSON, payloadStr))
                     .build();
 
             try (Response response = okHttpClient.newCall(request).execute()) {
@@ -332,7 +373,7 @@ public class BingoScreenshotManager {
      * Converts a screenshot to base64 for embedding in API requests.
      *
      * @param image the image to convert
-     * @return base64-encoded PNG string
+     * @return base64-encoded JPEG string
      */
     public String toBase64(BufferedImage image) {
         try {
