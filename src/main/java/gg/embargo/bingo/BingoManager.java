@@ -976,7 +976,7 @@ public class BingoManager {
                 JsonObject payload = new JsonObject();
                 payload.addProperty("bingoBoardId", submission.getBingoBoardId());
                 payload.addProperty("tileId", submission.getTileId());
-                payload.addProperty("playerName", submission.getPlayerName());
+                payload.addProperty("rsn", submission.getPlayerName());
                 payload.addProperty("itemId", submission.getItemId());
                 payload.addProperty("itemName", submission.getItemName());
                 payload.addProperty("quantity", submission.getQuantity());
