@@ -15,7 +15,6 @@ import javax.inject.Singleton;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.time.Instant;
 import java.util.Base64;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -34,7 +33,6 @@ public class BingoScreenshotManager {
     private static final String API_BASE = "https://embargo.gg/api/";
     private static final String SCREENSHOT_ENDPOINT = API_BASE + "bingo/plugin/screenshot";
 
-    private static final MediaType PNG = MediaType.parse("image/png");
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     // Maximum image dimension (resize if larger)
@@ -227,27 +225,24 @@ public class BingoScreenshotManager {
     }
 
     /**
-     * Uploads the screenshot to the API using multipart form data.
+     * Uploads the screenshot to the API using JSON with base64-encoded image.
      */
     private void uploadToApi(byte[] imageBytes, int boardId, int tileId, int itemId,
             String itemName, String playerName, int world) {
         try {
-            MultipartBody body = new MultipartBody.Builder()
-                    .setType(MultipartBody.FORM)
-                    .addFormDataPart("image", "screenshot.png",
-                            RequestBody.create(PNG, imageBytes))
-                    .addFormDataPart("boardId", String.valueOf(boardId))
-                    .addFormDataPart("tileId", String.valueOf(tileId))
-                    .addFormDataPart("itemId", String.valueOf(itemId))
-                    .addFormDataPart("itemName", itemName)
-                    .addFormDataPart("playerName", playerName)
-                    .addFormDataPart("world", String.valueOf(world))
-                    .addFormDataPart("timestamp", Instant.now().toString())
-                    .build();
+            // Convert image to base64
+            String screenshotBase64 = Base64.getEncoder().encodeToString(imageBytes);
+
+            // Build JSON payload
+            JsonObject payload = new JsonObject();
+            payload.addProperty("rsn", playerName);
+            payload.addProperty("boardId", boardId);
+            payload.addProperty("tileId", tileId);
+            payload.addProperty("screenshotBase64", screenshotBase64);
 
             Request request = new Request.Builder()
                     .url(SCREENSHOT_ENDPOINT)
-                    .post(body)
+                    .post(RequestBody.create(JSON, payload.toString()))
                     .build();
 
             try (Response response = okHttpClient.newCall(request).execute()) {
@@ -268,7 +263,8 @@ public class BingoScreenshotManager {
                         }
                     }
                 } else {
-                    log.warn("Failed to upload screenshot: HTTP {}", response.code());
+                    String errorBody = response.body() != null ? response.body().string() : "No response body";
+                    log.warn("Failed to upload screenshot: HTTP {} - {}", response.code(), errorBody);
                 }
             }
         } catch (IOException e) {
