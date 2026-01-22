@@ -1,6 +1,9 @@
 package gg.embargo;
 
 import com.google.inject.Provides;
+import gg.embargo.bingo.BingoCodewordOverlay;
+import gg.embargo.bingo.BingoManager;
+import gg.embargo.bingo.BingoScreenshotManager;
 import gg.embargo.collections.*;
 import gg.embargo.commands.CommandManager;
 import gg.embargo.eastereggs.NPCRenameManager;
@@ -25,6 +28,7 @@ import net.runelite.client.plugins.loottracker.LootReceived;
 import net.runelite.client.task.Schedule;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.Text;
 import net.runelite.http.api.loottracker.LootRecordType;
@@ -95,7 +99,21 @@ public class EmbargoPlugin extends Plugin {
 	@Inject
 	public CommandManager commandManager;
 
+	@Inject
+	private BingoManager bingoManager;
+
+	@Inject
+	private BingoScreenshotManager bingoScreenshotManager;
+
+	@Inject
+	private BingoCodewordOverlay bingoCodewordOverlay;
+
+	@Inject
+	private OverlayManager overlayManager;
+
 	private RuneScapeProfileType lastProfile;
+
+	private boolean bingoAlertSentThisSession = false;
 
 	private NavigationButton navButton;
 
@@ -171,6 +189,11 @@ public class EmbargoPlugin extends Plugin {
 			itemRenameManager.startUp();
 			npcRenameManager.startUp();
 		}
+
+		// Initialize bingo system
+		bingoManager.startUp();
+		bingoScreenshotManager.startUp();
+		overlayManager.add(bingoCodewordOverlay);
 	}
 
 	@Inject
@@ -203,6 +226,11 @@ public class EmbargoPlugin extends Plugin {
 		itemRenameManager.shutDown();
 		npcRenameManager.shutDown();
 		commandManager.shutDown();
+
+		// Shutdown bingo system
+		bingoManager.shutDown();
+		bingoScreenshotManager.shutDown();
+		overlayManager.remove(bingoCodewordOverlay);
 	}
 
 	@Subscribe
@@ -227,6 +255,10 @@ public class EmbargoPlugin extends Plugin {
 
 			if (isUsernameRegistered.get()) {
 				embargoPanel.updateLoggedIn(true);
+
+				// Send bingo alert on login
+				sendBingoLoginAlert();
+
 				return true;
 			}
 
@@ -238,10 +270,24 @@ public class EmbargoPlugin extends Plugin {
 					if (isRegistered) {
 						embargoPanel.updateLoggedIn(true);
 						isUsernameRegistered.set(true);
+
+						// Send bingo alert on login
+						sendBingoLoginAlert();
 					}
 				});
 			}
 			return isUsernameRegistered.get();
+		});
+	}
+
+	private void sendBingoLoginAlert() {
+		// Only send once per session, but allow re-alerting on re-login
+		boolean isFirstAlert = !bingoAlertSentThisSession;
+		bingoAlertSentThisSession = true;
+
+		// Delay slightly to ensure bingo state is loaded
+		clientThread.invokeLater(() -> {
+			bingoManager.sendBingoAlert(isFirstAlert);
 		});
 	}
 
@@ -266,6 +312,10 @@ public class EmbargoPlugin extends Plugin {
 
 		// Reset skill cache
 		skillLevelCache.clear();
+
+		// Clear bingo session state
+		bingoManager.onLogout();
+		bingoAlertSentThisSession = false;
 	}
 
 	@Schedule(period = SECONDS_BETWEEN_UPLOADS, unit = ChronoUnit.SECONDS, asynchronous = true)
@@ -460,6 +510,14 @@ public class EmbargoPlugin extends Plugin {
 			} else {
 				itemRenameManager.shutDown();
 				npcRenameManager.shutDown();
+			}
+		}
+
+		// Handle bingo tracking config change
+		if (event.getKey().equals("enableBingoTracking")) {
+			if (!config.enableBingoTracking()) {
+				// Notify server that tracking was disabled
+				bingoManager.notifyTrackingDisabled();
 			}
 		}
 	}

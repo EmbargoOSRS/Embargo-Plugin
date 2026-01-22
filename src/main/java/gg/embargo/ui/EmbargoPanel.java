@@ -6,6 +6,9 @@ import com.google.gson.JsonObject;
 import gg.embargo.DataManager;
 import gg.embargo.EmbargoConfig;
 import gg.embargo.EmbargoPlugin;
+import gg.embargo.bingo.BingoManager;
+import gg.embargo.bingo.BingoState;
+import gg.embargo.bingo.BingoTeam;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
@@ -61,6 +64,9 @@ public class EmbargoPanel extends PluginPanel {
     @Inject
     private EmbargoConfig config;
 
+    @Inject
+    private BingoManager bingoManager;
+
     @Setter
     public boolean isLoggedIn = false;
 
@@ -114,6 +120,10 @@ public class EmbargoPanel extends PluginPanel {
 
     // Of The Week event alerts
     private final Set<Integer> alertedEventIds = new HashSet<>();
+
+    // Bingo subsection
+    private JPanel bingoPanel;
+    private final Set<Integer> alertedBingoIds = new HashSet<>();
 
     // Periodic refresh for events/bounties/polls
     private static final int EVENTS_REFRESH_INTERVAL_MINUTES = 1;
@@ -446,10 +456,21 @@ public class EmbargoPanel extends PluginPanel {
         pollsPanel.add(createSmallLabel("Loading..."));
         eventsContainer.add(pollsPanel);
 
-        // Fetch events, bounties, and polls
+        eventsContainer.add(Box.createVerticalStrut(8));
+
+        // === Bingo Subsection ===
+        eventsContainer.add(createHeader("Bingo", false));
+        eventsContainer.add(Box.createVerticalStrut(4));
+
+        bingoPanel = createVerticalPanel();
+        bingoPanel.add(createSmallLabel("Loading..."));
+        eventsContainer.add(bingoPanel);
+
+        // Fetch events, bounties, polls, and bingo
         fetchAndUpdateEvents();
         fetchAndUpdateBounties();
         fetchAndUpdatePoll();
+        fetchAndUpdateBingo();
     }
 
     /**
@@ -726,6 +747,7 @@ public class EmbargoPanel extends PluginPanel {
         alertedBountyIds.clear();
         alertedPollIds.clear();
         alertedEventIds.clear();
+        alertedBingoIds.clear();
     }
 
     /**
@@ -738,10 +760,11 @@ public class EmbargoPanel extends PluginPanel {
 
         eventsRefreshTask = executorService.scheduleAtFixedRate(() -> {
             if (isLoggedIn) {
-                log.debug("Periodic refresh: fetching events, bounties, and polls");
+                log.debug("Periodic refresh: fetching events, bounties, polls, and bingo");
                 fetchAndUpdateEvents();
                 fetchAndUpdateBounties();
                 fetchAndUpdatePoll();
+                fetchAndUpdateBingo();
             }
         }, EVENTS_REFRESH_INTERVAL_MINUTES, EVENTS_REFRESH_INTERVAL_MINUTES, TimeUnit.MINUTES);
     }
@@ -842,6 +865,128 @@ public class EmbargoPanel extends PluginPanel {
                             + "</col>! Check the side panel or Discord to vote.",
                     null);
         });
+    }
+
+    /**
+     * Fetches bingo state and updates the panel
+     */
+    private void fetchAndUpdateBingo() {
+        // Trigger a refresh of bingo state, then update the UI
+        bingoManager.refreshBingoState();
+        // Update UI after a short delay to allow async fetch to complete
+        executorService.schedule(() -> SwingUtilities.invokeLater(this::updateBingoPanel), 500, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Updates the bingo panel with the current bingo states
+     */
+    private void updateBingoPanel() {
+        bingoPanel.removeAll();
+
+        java.util.List<BingoState> states = bingoManager.getCurrentStates();
+
+        if (states == null || states.isEmpty()) {
+            bingoPanel.add(createSmallLabel("No active bingo"));
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
+            return;
+        }
+
+        // Filter to only active bingos
+        java.util.List<BingoState> activeStates = states.stream()
+                .filter(BingoState::isActive)
+                .collect(java.util.stream.Collectors.toList());
+
+        if (activeStates.isEmpty()) {
+            bingoPanel.add(createSmallLabel("No active bingo"));
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
+            return;
+        }
+
+        // Display each active bingo
+        boolean firstBingo = true;
+        for (BingoState state : activeStates) {
+            if (!firstBingo) {
+                bingoPanel.add(Box.createVerticalStrut(8));
+                bingoPanel.add(new JSeparator());
+                bingoPanel.add(Box.createVerticalStrut(4));
+            }
+            firstBingo = false;
+
+            addBingoStateToPanel(state);
+        }
+
+        eventsContainer.revalidate();
+        eventsContainer.repaint();
+    }
+
+    /**
+     * Adds a single bingo state's information to the bingo panel
+     */
+    private void addBingoStateToPanel(BingoState state) {
+        // Show bingo name and status
+        String bingoName = state.getName();
+        int bingoId = state.getId();
+
+        // Alert user if this is a new bingo they haven't been alerted about
+        if (isLoggedIn && !alertedBingoIds.contains(bingoId)) {
+            alertedBingoIds.add(bingoId);
+            // BingoManager handles alerts, so we don't need to send one here
+        }
+
+        // Status indicator
+        bingoPanel.add(createSmallLabel("Active", COLOR_GREEN));
+        bingoPanel.add(Box.createVerticalStrut(4));
+
+        // Bingo name as clickable link
+        JLabel nameLabel = createSmallLabel(bingoName, Color.WHITE);
+        makeClickable(nameLabel, "https://embargo.gg/bingo/" + bingoId, "Click to view on embargo.gg");
+        bingoPanel.add(nameLabel);
+
+        // Time remaining
+        String timeRemaining = state.getFormattedTimeRemaining();
+        JLabel timeLabel = new JLabel(htmlLabel("Ends in:", " " + timeRemaining));
+        styleLabel(timeLabel);
+        bingoPanel.add(timeLabel);
+
+        // Check if enrolled
+        if (state.isEnrolled()) {
+            BingoTeam team = state.getUserTeam();
+
+            bingoPanel.add(Box.createVerticalStrut(4));
+
+            // Team name
+            if (team != null) {
+                JLabel teamLabel = new JLabel(htmlLabel("Team:", " " + team.getName()));
+                styleLabel(teamLabel);
+                bingoPanel.add(teamLabel);
+
+                // Team points
+                JLabel pointsLabel = new JLabel(htmlLabel("Points:", " " + team.getTotalPoints()));
+                styleLabel(pointsLabel);
+                bingoPanel.add(pointsLabel);
+
+                // Tiles completed
+                int completed = state.getCompletedTileCount();
+                int total = state.getTiles().size();
+                JLabel tilesLabel = new JLabel(htmlLabel("Tiles:", " " + completed + "/" + total));
+                styleLabel(tilesLabel);
+                bingoPanel.add(tilesLabel);
+            }
+
+            // Show tracking status
+            bingoPanel.add(Box.createVerticalStrut(4));
+            boolean trackingEnabled = config.enableBingoTracking();
+            Color trackingColor = trackingEnabled ? COLOR_GREEN : COLOR_ORANGE;
+            String trackingText = trackingEnabled ? "Tracking enabled" : "Tracking disabled";
+            bingoPanel.add(createSmallLabel(trackingText, trackingColor));
+        } else {
+            // Not enrolled
+            bingoPanel.add(Box.createVerticalStrut(4));
+            bingoPanel.add(createSmallLabel("Not enrolled", COLOR_ORANGE));
+            bingoPanel.add(createSmallLabel("Visit embargo.gg to join"));
+        }
     }
 
     /**
@@ -973,9 +1118,10 @@ public class EmbargoPanel extends PluginPanel {
         missingRequirementsPanelX.clearItems();
         updateMissingItemCount(0);
 
-        // Refresh events (includes Of The Week and Bounties)
+        // Refresh events (includes Of The Week, Bounties, and Bingo)
         fetchAndUpdateEvents();
         fetchAndUpdateBounties();
+        fetchAndUpdateBingo();
 
         // Force refresh by calling updateLoggedIn with scheduled=true
         updateLoggedIn(true);
@@ -1041,6 +1187,9 @@ public class EmbargoPanel extends PluginPanel {
     public void init() {
         this.setupSidePanel();
         logOut();
+
+        // Register listener for bingo state changes to update UI
+        bingoManager.addStateChangeListener(states -> SwingUtilities.invokeLater(this::updateBingoPanel));
     }
 
     public void updateLoggedIn(boolean scheduled) {
@@ -1083,10 +1232,11 @@ public class EmbargoPanel extends PluginPanel {
 
                 // Only show "Loading..." on first login
                 if (isFirstLogin) {
-                    // Refresh events (Of The Week and Bounties) on login
+                    // Refresh events (Of The Week, Bounties, Bingo) on login
                     fetchAndUpdateEvents();
                     fetchAndUpdateBounties();
                     fetchAndUpdatePoll();
+                    fetchAndUpdateBingo();
 
                     // Start periodic refresh for events/bounties/polls
                     startPeriodicEventsRefresh();
