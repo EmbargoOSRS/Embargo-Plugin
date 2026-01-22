@@ -1,7 +1,7 @@
 package gg.embargo;
 
 import com.google.inject.Provides;
-import gg.embargo.bingo.BingoCodewordOverlay;
+import gg.embargo.bingo.BingoCodewordOverlayManager;
 import gg.embargo.bingo.BingoManager;
 import gg.embargo.bingo.BingoScreenshotManager;
 import gg.embargo.collections.*;
@@ -28,7 +28,6 @@ import net.runelite.client.plugins.loottracker.LootReceived;
 import net.runelite.client.task.Schedule;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
-import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.Text;
 import net.runelite.http.api.loottracker.LootRecordType;
@@ -106,10 +105,7 @@ public class EmbargoPlugin extends Plugin {
 	private BingoScreenshotManager bingoScreenshotManager;
 
 	@Inject
-	private BingoCodewordOverlay bingoCodewordOverlay;
-
-	@Inject
-	private OverlayManager overlayManager;
+	private BingoCodewordOverlayManager bingoCodewordOverlayManager;
 
 	private RuneScapeProfileType lastProfile;
 
@@ -193,7 +189,7 @@ public class EmbargoPlugin extends Plugin {
 		// Initialize bingo system
 		bingoManager.startUp();
 		bingoScreenshotManager.startUp();
-		overlayManager.add(bingoCodewordOverlay);
+		bingoCodewordOverlayManager.startUp();
 	}
 
 	@Inject
@@ -230,7 +226,7 @@ public class EmbargoPlugin extends Plugin {
 		// Shutdown bingo system
 		bingoManager.shutDown();
 		bingoScreenshotManager.shutDown();
-		overlayManager.remove(bingoCodewordOverlay);
+		bingoCodewordOverlayManager.shutDown();
 	}
 
 	@Subscribe

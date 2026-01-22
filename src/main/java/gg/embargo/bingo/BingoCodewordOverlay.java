@@ -2,56 +2,51 @@
 package gg.embargo.bingo;
 
 import gg.embargo.EmbargoConfig;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
-import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayPriority;
 import net.runelite.client.ui.overlay.components.ComponentConstants;
-import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.PanelComponent;
 import net.runelite.client.ui.overlay.components.TitleComponent;
 
-import javax.inject.Inject;
-import javax.inject.Singleton;
 import java.awt.*;
-import java.util.List;
-import java.util.Map;
 
 /**
- * Overlay that displays the secret bingo codeword on screen.
- * <p>
- * This overlay is only visible when:
- * <ul>
- * <li>There is an active bingo</li>
- * <li>The user is enrolled in the bingo</li>
- * <li>The bingo has a codeword set</li>
- * <li>The user has not disabled the codeword display in config</li>
- * </ul>
- * <p>
- * The overlay renders in the top-right corner by default but can be
- * moved by the user like any other RuneLite overlay.
+ * Individual overlay that displays a single bingo's codeword.
+ * Each active bingo with a codeword gets its own overlay instance.
  */
 @Slf4j
-@Singleton
 public class BingoCodewordOverlay extends Overlay {
     private static final Color BACKGROUND_COLOR = new Color(45, 45, 45, 220);
-    private static final Color BORDER_COLOR = new Color(255, 144, 0); // Embargo orange
-    private static final Color TITLE_COLOR = new Color(255, 144, 0);
+    private static final Color TITLE_COLOR = new Color(255, 144, 0); // Embargo orange
     private static final Color CODEWORD_COLOR = Color.WHITE;
+    private static final Color SEPARATOR_COLOR = new Color(100, 100, 100);
 
     private final Client client;
     private final BingoManager bingoManager;
     private final EmbargoConfig config;
     private final PanelComponent panelComponent = new PanelComponent();
 
-    @Inject
-    public BingoCodewordOverlay(Client client, BingoManager bingoManager, EmbargoConfig config) {
+    @Getter
+    private final int boardId;
+
+    /**
+     * Creates a new codeword overlay for a specific bingo board.
+     *
+     * @param client       the game client
+     * @param bingoManager the bingo manager
+     * @param config       the plugin config
+     * @param boardId      the bingo board ID this overlay is for
+     */
+    public BingoCodewordOverlay(Client client, BingoManager bingoManager, EmbargoConfig config, int boardId) {
         this.client = client;
         this.bingoManager = bingoManager;
         this.config = config;
+        this.boardId = boardId;
 
         setPosition(OverlayPosition.TOP_RIGHT);
         setLayer(OverlayLayer.ABOVE_WIDGETS);
@@ -59,7 +54,7 @@ public class BingoCodewordOverlay extends Overlay {
 
         // Make the overlay movable and resizable
         setMovable(true);
-        setResizable(false);
+        setResizable(true);
         setSnappable(true);
 
         panelComponent.setBackgroundColor(BACKGROUND_COLOR);
@@ -74,51 +69,38 @@ public class BingoCodewordOverlay extends Overlay {
             return null;
         }
 
-        List<BingoState> activeStates = bingoManager.getActiveEnrolledStates();
-        if (activeStates.isEmpty()) {
+        BingoState state = bingoManager.getStateByBoardId(boardId);
+        if (state == null) {
+            return null;
+        }
+
+        String codeword = state.getCodeword();
+        if (codeword == null || codeword.isEmpty()) {
             return null;
         }
 
         panelComponent.getChildren().clear();
 
-        // Add title
+        // Get team name
+        String teamName = state.getUserTeam() != null ? state.getUserTeam().getName() : state.getName();
+
+        // Add team name as title
         panelComponent.getChildren().add(TitleComponent.builder()
-                .text("Bingo Codes")
+                .text(teamName)
                 .color(TITLE_COLOR)
                 .build());
 
-        // Add codeword and time remaining for each active bingo
-        for (BingoState state : activeStates) {
-            String codeword = state.getCodeword();
-            if (codeword == null || codeword.isEmpty()) {
-                continue;
-            }
+        // Add separator line
+        panelComponent.getChildren().add(TitleComponent.builder()
+                .text("────────")
+                .color(SEPARATOR_COLOR)
+                .build());
 
-            // Show bingo name if multiple bingos
-            if (activeStates.size() > 1) {
-                panelComponent.getChildren().add(LineComponent.builder()
-                        .left(state.getName() + ":")
-                        .leftColor(Color.LIGHT_GRAY)
-                        .right(codeword)
-                        .rightColor(CODEWORD_COLOR)
-                        .build());
-            } else {
-                // Single bingo - just show codeword prominently
-                panelComponent.getChildren().add(TitleComponent.builder()
-                        .text(codeword)
-                        .color(CODEWORD_COLOR)
-                        .build());
-            }
-
-            // Add time remaining
-            if (state.isActive()) {
-                String timeRemaining = state.getFormattedTimeRemaining();
-                panelComponent.getChildren().add(TitleComponent.builder()
-                        .text("Ends: " + timeRemaining)
-                        .color(Color.LIGHT_GRAY)
-                        .build());
-            }
-        }
+        // Add codeword prominently
+        panelComponent.getChildren().add(TitleComponent.builder()
+                .text(codeword)
+                .color(CODEWORD_COLOR)
+                .build());
 
         return panelComponent.render(graphics);
     }
@@ -134,13 +116,14 @@ public class BingoCodewordOverlay extends Overlay {
             return false;
         }
 
-        // Check if enrolled in active bingo
-        if (!bingoManager.isEnrolledAndActive()) {
+        // Check if this specific bingo state exists and is valid
+        BingoState state = bingoManager.getStateByBoardId(boardId);
+        if (state == null || !state.isEnrolled() || !state.isActive()) {
             return false;
         }
 
-        // Check if there's at least one codeword
-        Map<String, String> codewords = bingoManager.getCodewords();
-        return !codewords.isEmpty();
+        // Check if this bingo has a codeword
+        String codeword = state.getCodeword();
+        return codeword != null && !codeword.isEmpty();
     }
 }
