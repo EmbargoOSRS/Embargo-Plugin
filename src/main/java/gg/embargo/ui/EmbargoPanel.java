@@ -9,6 +9,11 @@ import gg.embargo.EmbargoPlugin;
 import gg.embargo.bingo.BingoManager;
 import gg.embargo.bingo.BingoState;
 import gg.embargo.bingo.BingoTeam;
+import gg.embargo.bingo.BingoTile;
+import gg.embargo.bingo.BingoTileType;
+import gg.embargo.bingo.BingoTileStatus;
+import gg.embargo.bingo.BingoItemGroup;
+import gg.embargo.bingo.BingoTeamTileProgress;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
@@ -34,12 +39,16 @@ import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import javax.imageio.ImageIO;
 
 @Slf4j
 public class EmbargoPanel extends PluginPanel {
@@ -492,6 +501,11 @@ public class EmbargoPanel extends PluginPanel {
 
     private static final Color COLOR_GREEN = new Color(0x00, 0xc8, 0x00);
     private static final Color COLOR_ORANGE = new Color(0xff, 0xc0, 0x00);
+    private static final Color COLOR_YELLOW = new Color(0xff, 0xff, 0x00);
+    private static final Color COLOR_GRAY = new Color(0x99, 0x99, 0x99);
+
+    // Static cache for bingo tile images (persists across panel refreshes)
+    private static final Map<String, ImageIcon> TILE_IMAGE_CACHE = new ConcurrentHashMap<>();
 
     /**
      * Updates the Of The Week panel with the API response
@@ -968,31 +982,344 @@ public class EmbargoPanel extends PluginPanel {
                 styleLabel(teamLabel);
                 bingoPanel.add(teamLabel);
 
-                // Team points
-                JLabel pointsLabel = new JLabel(htmlLabel("Points:", " " + team.getTotalPoints()));
-                styleLabel(pointsLabel);
-                bingoPanel.add(pointsLabel);
-
                 // Tiles completed
                 int completed = state.getCompletedTileCount();
                 int total = state.getTiles().size();
                 JLabel tilesLabel = new JLabel(htmlLabel("Tiles:", " " + completed + "/" + total));
                 styleLabel(tilesLabel);
                 bingoPanel.add(tilesLabel);
-            }
 
-            // Show tracking status
-            bingoPanel.add(Box.createVerticalStrut(4));
-            boolean trackingEnabled = config.enableBingoTracking();
-            Color trackingColor = trackingEnabled ? COLOR_GREEN : COLOR_ORANGE;
-            String trackingText = trackingEnabled ? "Tracking enabled" : "Tracking disabled";
-            bingoPanel.add(createSmallLabel(trackingText, trackingColor));
+                // Show visual bingo board grid
+                addBingoBoardGrid(state);
+
+                // Show in-progress tiles with group details
+                addInProgressTilesToPanel(state);
+            }
         } else {
             // Not enrolled
             bingoPanel.add(Box.createVerticalStrut(4));
             bingoPanel.add(createSmallLabel("Not enrolled", COLOR_ORANGE));
             bingoPanel.add(createSmallLabel("Visit embargo.gg to join"));
         }
+    }
+
+    /**
+     * Adds a visual bingo board grid showing tile completion statuses with icons
+     */
+    private void addBingoBoardGrid(BingoState state) {
+        int boardSize = state.getSize();
+        int totalTiles = boardSize * boardSize;
+
+        bingoPanel.add(Box.createVerticalStrut(8));
+
+        // Create grid panel
+        JPanel gridPanel = new JPanel(new GridLayout(boardSize, boardSize, 2, 2));
+        gridPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        gridPanel.setBorder(new EmptyBorder(2, 2, 2, 2));
+
+        // Get tiles sorted by position
+        java.util.List<BingoTile> sortedTiles = state.getTilesByPosition();
+
+        // Calculate tile size based on panel width (aim for ~180px total width)
+        int tileSize = Math.max(28, (180 - (boardSize + 1) * 2) / boardSize);
+        int iconSize = tileSize - 6; // Leave room for border
+
+        // Pre-fetch images in background to warm up cache
+        prefetchTileImages(state, iconSize);
+
+        for (int i = 0; i < totalTiles; i++) {
+            // Find tile at this position
+            BingoTile tile = null;
+            for (BingoTile t : sortedTiles) {
+                if (t.getPosition() == i) {
+                    tile = t;
+                    break;
+                }
+            }
+
+            JPanel tilePanel = createBingoTileCell(tile, state, tileSize, iconSize);
+            gridPanel.add(tilePanel);
+        }
+
+        bingoPanel.add(gridPanel);
+
+        // Add legend
+        bingoPanel.add(Box.createVerticalStrut(4));
+        JPanel legendPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        legendPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+        legendPanel.add(createLegendItem(new Color(0x22, 0x8B, 0x22), "Done"));
+        legendPanel.add(createLegendItem(new Color(0xDA, 0xA5, 0x20), "Partial"));
+        legendPanel.add(createLegendItem(new Color(0x3C, 0x3C, 0x3C), "Todo"));
+
+        bingoPanel.add(legendPanel);
+    }
+
+    /**
+     * Creates a single bingo tile cell with icon and status border
+     */
+    private JPanel createBingoTileCell(BingoTile tile, BingoState state, int tileSize, int iconSize) {
+        JPanel tilePanel = new JPanel(new BorderLayout());
+        tilePanel.setPreferredSize(new Dimension(tileSize, tileSize));
+
+        if (tile == null) {
+            tilePanel.setBackground(new Color(0x2A, 0x2A, 0x2A)); // Empty slot
+            return tilePanel;
+        }
+
+        BingoTeamTileProgress progress = state.getProgress(tile.getId());
+        BingoTileStatus status = progress != null ? progress.getStatus() : BingoTileStatus.PENDING;
+
+        // Set border color based on status
+        Color borderColor;
+        switch (status) {
+            case COMPLETED:
+                borderColor = new Color(0x22, 0x8B, 0x22); // Forest green
+                break;
+            case PARTIAL:
+                borderColor = new Color(0xDA, 0xA5, 0x20); // Goldenrod
+                break;
+            default:
+                borderColor = new Color(0x55, 0x55, 0x55); // Gray
+                break;
+        }
+
+        tilePanel.setBackground(new Color(0x1E, 0x1E, 0x1E));
+        tilePanel.setBorder(BorderFactory.createLineBorder(borderColor, 2));
+
+        // Add tooltip with tile name
+        String tooltipText = tile.getTitle();
+        if (tooltipText != null && !tooltipText.isEmpty()) {
+            if (progress != null && status == BingoTileStatus.PARTIAL) {
+                tooltipText += " (" + progress.getCurrentCount() + "/" + tile.getRequiredCount() + ")";
+            }
+            tilePanel.setToolTipText(tooltipText);
+        }
+
+        // Try to load and display image
+        String imageUrl = tile.getImageUrl();
+        if (imageUrl != null && !imageUrl.isEmpty()) {
+            loadTileImage(tilePanel, imageUrl, iconSize);
+        }
+
+        return tilePanel;
+    }
+
+    /**
+     * Loads a tile image and adds it to the panel. Uses cache for speed.
+     */
+    private void loadTileImage(JPanel tilePanel, String imageUrl, int iconSize) {
+        // Create cache key with size for proper scaling
+        String cacheKey = imageUrl + "@" + iconSize;
+
+        // Check cache first (on current thread for instant display)
+        ImageIcon cachedIcon = TILE_IMAGE_CACHE.get(cacheKey);
+        if (cachedIcon != null) {
+            JLabel iconLabel = new JLabel(cachedIcon);
+            iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
+            tilePanel.add(iconLabel, BorderLayout.CENTER);
+            return;
+        }
+
+        // Load async if not cached
+        executorService.submit(() -> {
+            try {
+                // Use ImageIO for faster loading than ImageIcon(URL)
+                java.net.URL url = new java.net.URL(imageUrl);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(3000);
+                conn.setRequestProperty("User-Agent", "RuneLite");
+
+                BufferedImage originalImage = ImageIO.read(conn.getInputStream());
+                conn.disconnect();
+
+                if (originalImage != null) {
+                    // Scale image using faster method
+                    Image scaledImage = originalImage.getScaledInstance(
+                            iconSize, iconSize, Image.SCALE_FAST);
+
+                    // Convert to BufferedImage for better performance
+                    BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
+                    Graphics2D g2d = bufferedScaled.createGraphics();
+                    g2d.drawImage(scaledImage, 0, 0, null);
+                    g2d.dispose();
+
+                    ImageIcon scaledIcon = new ImageIcon(bufferedScaled);
+
+                    // Cache the scaled icon
+                    TILE_IMAGE_CACHE.put(cacheKey, scaledIcon);
+
+                    SwingUtilities.invokeLater(() -> {
+                        JLabel iconLabel = new JLabel(scaledIcon);
+                        iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
+                        tilePanel.add(iconLabel, BorderLayout.CENTER);
+                        tilePanel.revalidate();
+                        tilePanel.repaint();
+                    });
+                }
+            } catch (Exception e) {
+                // Image failed to load, leave tile as is
+                log.debug("Failed to load bingo tile image: {}", imageUrl);
+            }
+        });
+    }
+
+    /**
+     * Pre-fetches all tile images for a bingo state in parallel.
+     * Call this when bingo state is loaded to warm up the cache.
+     */
+    private void prefetchTileImages(BingoState state, int iconSize) {
+        for (BingoTile tile : state.getTiles().values()) {
+            String imageUrl = tile.getImageUrl();
+            if (imageUrl != null && !imageUrl.isEmpty()) {
+                String cacheKey = imageUrl + "@" + iconSize;
+                if (!TILE_IMAGE_CACHE.containsKey(cacheKey)) {
+                    // Load in background
+                    executorService.submit(() -> {
+                        try {
+                            java.net.URL url = new java.net.URL(imageUrl);
+                            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                            conn.setConnectTimeout(3000);
+                            conn.setReadTimeout(3000);
+                            conn.setRequestProperty("User-Agent", "RuneLite");
+
+                            BufferedImage originalImage = ImageIO.read(conn.getInputStream());
+                            conn.disconnect();
+
+                            if (originalImage != null) {
+                                Image scaledImage = originalImage.getScaledInstance(
+                                        iconSize, iconSize, Image.SCALE_FAST);
+
+                                BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
+                                Graphics2D g2d = bufferedScaled.createGraphics();
+                                g2d.drawImage(scaledImage, 0, 0, null);
+                                g2d.dispose();
+
+                                TILE_IMAGE_CACHE.put(cacheKey, new ImageIcon(bufferedScaled));
+                            }
+                        } catch (Exception e) {
+                            log.debug("Failed to prefetch bingo tile image: {}", imageUrl);
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    /**
+     * Creates a small legend item with a colored square and label
+     */
+    private JPanel createLegendItem(Color color, String text) {
+        JPanel item = new JPanel();
+        item.setLayout(new BoxLayout(item, BoxLayout.X_AXIS));
+        item.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+        JPanel colorBox = new JPanel();
+        colorBox.setPreferredSize(new Dimension(8, 8));
+        colorBox.setMaximumSize(new Dimension(8, 8));
+        colorBox.setMinimumSize(new Dimension(8, 8));
+        colorBox.setBackground(color);
+        item.add(colorBox);
+
+        item.add(Box.createHorizontalStrut(3));
+
+        JLabel label = new JLabel(text);
+        label.setFont(FontManager.getRunescapeSmallFont());
+        label.setForeground(Color.LIGHT_GRAY);
+        item.add(label);
+
+        return item;
+    }
+
+    /**
+     * Adds in-progress tiles with their group details to the bingo panel
+     */
+    private void addInProgressTilesToPanel(BingoState state) {
+        // Get tiles that are partial (in progress)
+        java.util.List<BingoTile> partialTiles = new ArrayList<>();
+        for (BingoTile tile : state.getTiles().values()) {
+            BingoTeamTileProgress progress = state.getProgress(tile.getId());
+            if (progress != null && progress.getStatus() == BingoTileStatus.PARTIAL) {
+                partialTiles.add(tile);
+            }
+        }
+
+        if (partialTiles.isEmpty()) {
+            return;
+        }
+
+        bingoPanel.add(Box.createVerticalStrut(8));
+        bingoPanel.add(createSmallLabel("In Progress:", Color.WHITE));
+        bingoPanel.add(Box.createVerticalStrut(2));
+
+        // Show up to 5 partial tiles
+        int shown = 0;
+        for (BingoTile tile : partialTiles) {
+            if (shown >= 5) {
+                int remaining = partialTiles.size() - 5;
+                bingoPanel.add(createSmallLabel("  +" + remaining + " more...", COLOR_GRAY));
+                break;
+            }
+
+            BingoTeamTileProgress progress = state.getProgress(tile.getId());
+            String tileTitle = tile.getTitle();
+            if (tileTitle.length() > 20) {
+                tileTitle = tileTitle.substring(0, 17) + "...";
+            }
+
+            // For grouped tiles, show group progress
+            if (tile.getTileType() == BingoTileType.GROUPED && !tile.getItemGroups().isEmpty()) {
+                bingoPanel.add(createSmallLabel("  " + tileTitle, COLOR_YELLOW));
+                for (BingoItemGroup group : tile.getItemGroups()) {
+                    // Calculate group progress based on progress entries
+                    int groupProgress = calculateGroupProgress(state, tile, group, progress);
+                    int required = group.getRequiredCount();
+                    String groupName = group.getGroupName();
+                    if (groupName.length() > 15) {
+                        groupName = groupName.substring(0, 12) + "...";
+                    }
+                    Color progressColor = groupProgress >= required ? COLOR_GREEN : COLOR_ORANGE;
+                    bingoPanel.add(createSmallLabel("    " + groupName + ": " + groupProgress + "/" + required, progressColor));
+                }
+            } else {
+                // For quantity tiles, show count
+                int current = progress != null ? progress.getCurrentCount() : 0;
+                int required = tile.getRequiredCount();
+                String progressText = "  " + tileTitle + " (" + current + "/" + required + ")";
+                bingoPanel.add(createSmallLabel(progressText, COLOR_YELLOW));
+            }
+
+            shown++;
+        }
+    }
+
+    /**
+     * Calculates progress for a specific group within a grouped tile.
+     * This is a simplified calculation based on the current count and items in the group.
+     */
+    private int calculateGroupProgress(BingoState state, BingoTile tile, BingoItemGroup group, BingoTeamTileProgress progress) {
+        // If we have detailed progress entries, we could count items per group
+        // For now, return a rough estimate based on the items in the group
+        // This would need enhancement if we want accurate per-group tracking
+        if (progress == null) {
+            return 0;
+        }
+
+        // For accurate group progress, we'd need the server to return per-group counts
+        // For now, show the overall progress divided proportionally
+        int totalItems = 0;
+        for (BingoItemGroup g : tile.getItemGroups()) {
+            totalItems += g.getRequiredCount();
+        }
+
+        if (totalItems == 0) {
+            return 0;
+        }
+
+        // Proportional estimate (not perfectly accurate but gives an indication)
+        int groupProportion = (progress.getCurrentCount() * group.getRequiredCount()) / totalItems;
+        return Math.min(groupProportion, group.getRequiredCount());
     }
 
     /**
