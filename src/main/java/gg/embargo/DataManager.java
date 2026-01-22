@@ -511,12 +511,17 @@ public class DataManager {
 
                         } else {
                             String responseBody = response.body().string();
-                            JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
-                            if (jsonResponse != null && jsonResponse.has("message")
-                                    && "not registered".equals(jsonResponse.get("message").getAsString())) {
-                                stopTryingForAccount.set(true);
-                                callback.accept(false);
-                                return;
+                            try {
+                                JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
+                                if (jsonResponse != null && jsonResponse.has("message")
+                                        && "not registered".equals(jsonResponse.get("message").getAsString())) {
+                                    stopTryingForAccount.set(true);
+                                    callback.accept(false);
+                                    return;
+                                }
+                            } catch (Exception e) {
+                                // Response is not valid JSON (e.g., 502 error page)
+                                log.debug("Non-JSON error response: {}", response.code());
                             }
                             log.error("Failed to check if {} is registered with Embargo's database. Status: {}",
                                     username, response.code());
