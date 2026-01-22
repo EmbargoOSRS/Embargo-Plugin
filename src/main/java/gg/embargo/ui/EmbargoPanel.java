@@ -1137,7 +1137,7 @@ public class EmbargoPanel extends PluginPanel {
                 if (originalImage != null) {
                     // Scale image using faster method
                     Image scaledImage = originalImage.getScaledInstance(
-                            iconSize, iconSize, Image.SCALE_FAST);
+                            iconSize, iconSize, Image.SCALE_SMOOTH);
 
                     // Convert to BufferedImage for better performance
                     BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
