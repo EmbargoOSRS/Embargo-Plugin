@@ -161,6 +161,7 @@ public class EmbargoPanel extends PluginPanel {
         label.setFont(smallFont);
         label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        label.setHorizontalAlignment(SwingConstants.LEFT);
         return label;
     }
 
@@ -172,6 +173,7 @@ public class EmbargoPanel extends PluginPanel {
         label.setFont(smallFont);
         label.setForeground(color);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        label.setHorizontalAlignment(SwingConstants.LEFT);
         return label;
     }
 
@@ -204,10 +206,36 @@ public class EmbargoPanel extends PluginPanel {
     private void makeClickable(JLabel label, String url, String tooltip) {
         label.setCursor(new Cursor(Cursor.HAND_CURSOR));
         label.setToolTipText(tooltip);
+
+        // Use a light blue color for links to indicate clickability
+        final Color linkColor = new Color(0x5D, 0x9C, 0xEC);
+
+        // Only apply link color to non-HTML labels (HTML labels have their own styling)
+        String text = label.getText();
+        boolean isHtml = text != null && text.toLowerCase().startsWith("<html>");
+        if (!isHtml) {
+            label.setForeground(linkColor);
+        }
+
+        // Use label's foreground color for underline, or link color for HTML labels
+        final Color underlineColor = isHtml ? Color.WHITE : linkColor;
+
         label.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
                 LinkBrowser.browse(url);
+            }
+
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                // Add underline border on hover
+                label.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, underlineColor));
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                // Remove underline border
+                label.setBorder(null);
             }
         });
     }
@@ -237,6 +265,7 @@ public class EmbargoPanel extends PluginPanel {
         label.setFont(smallFont);
         label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        label.setHorizontalAlignment(SwingConstants.LEFT);
     }
 
     void setupVersionPanel() {
@@ -955,12 +984,12 @@ public class EmbargoPanel extends PluginPanel {
             // BingoManager handles alerts, so we don't need to send one here
         }
 
-        // Status indicator
-        bingoPanel.add(createSmallLabel("Active", COLOR_GREEN));
-        bingoPanel.add(Box.createVerticalStrut(4));
-
-        // Bingo name as clickable link
-        JLabel nameLabel = createSmallLabel(bingoName, Color.WHITE);
+        // Bingo name with status - "Event Name - Active"
+        JLabel nameLabel = new JLabel("<html><body style='color:white'>" + bingoName +
+                " - <span style='color:#00ff00'>Active</span></body></html>");
+        nameLabel.setFont(smallFont);
+        nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        nameLabel.setHorizontalAlignment(SwingConstants.LEFT);
         makeClickable(nameLabel, "https://embargo.gg/bingo/" + bingoId, "Click to view on embargo.gg");
         bingoPanel.add(nameLabel);
 
@@ -1016,6 +1045,7 @@ public class EmbargoPanel extends PluginPanel {
         JPanel gridPanel = new JPanel(new GridLayout(boardSize, boardSize, 2, 2));
         gridPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         gridPanel.setBorder(new EmptyBorder(2, 2, 2, 2));
+        gridPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         // Get tiles sorted by position
         java.util.List<BingoTile> sortedTiles = state.getTilesByPosition();
@@ -1023,6 +1053,12 @@ public class EmbargoPanel extends PluginPanel {
         // Calculate tile size based on panel width (aim for ~180px total width)
         int tileSize = Math.max(28, (180 - (boardSize + 1) * 2) / boardSize);
         int iconSize = tileSize - 6; // Leave room for border
+
+        // Set grid size constraints
+        int gridWidth = boardSize * tileSize + (boardSize + 1) * 2;
+        int gridHeight = boardSize * tileSize + (boardSize + 1) * 2;
+        gridPanel.setPreferredSize(new Dimension(gridWidth, gridHeight));
+        gridPanel.setMaximumSize(new Dimension(gridWidth, gridHeight));
 
         // Pre-fetch images in background to warm up cache
         prefetchTileImages(state, iconSize);
@@ -1047,6 +1083,7 @@ public class EmbargoPanel extends PluginPanel {
         bingoPanel.add(Box.createVerticalStrut(4));
         JPanel legendPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         legendPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        legendPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         legendPanel.add(createLegendItem(new Color(0x22, 0x8B, 0x22), "Done"));
         legendPanel.add(createLegendItem(new Color(0xDA, 0xA5, 0x20), "Partial"));
