@@ -5,31 +5,24 @@ import gg.embargo.EmbargoConfig;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
-import net.runelite.client.ui.overlay.Overlay;
-import net.runelite.client.ui.overlay.OverlayLayer;
+import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayPriority;
-import net.runelite.client.ui.overlay.components.ComponentConstants;
-import net.runelite.client.ui.overlay.components.PanelComponent;
-import net.runelite.client.ui.overlay.components.TitleComponent;
+import net.runelite.client.ui.overlay.components.LineComponent;
 
 import java.awt.*;
 
 /**
- * Individual overlay that displays a single bingo's codeword.
+ * Compact overlay that displays a single bingo's codeword.
  * Each active bingo with a codeword gets its own overlay instance.
  */
 @Slf4j
-public class BingoCodewordOverlay extends Overlay {
-    private static final Color BACKGROUND_COLOR = new Color(45, 45, 45, 220);
-    private static final Color TITLE_COLOR = new Color(255, 144, 0); // Embargo orange
-    private static final Color CODEWORD_COLOR = Color.WHITE;
-    private static final Color SEPARATOR_COLOR = new Color(100, 100, 100);
+public class BingoCodewordOverlay extends OverlayPanel {
+    private static final Color CODEWORD_COLOR = new Color(255, 144, 0); // Embargo orange
 
     private final Client client;
     private final BingoManager bingoManager;
     private final EmbargoConfig config;
-    private final PanelComponent panelComponent = new PanelComponent();
 
     @Getter
     private final int boardId;
@@ -48,18 +41,10 @@ public class BingoCodewordOverlay extends Overlay {
         this.config = config;
         this.boardId = boardId;
 
-        setPosition(OverlayPosition.TOP_RIGHT);
-        setLayer(OverlayLayer.ABOVE_WIDGETS);
+        setPosition(OverlayPosition.TOP_CENTER);
         setPriority(OverlayPriority.LOW);
-
-        // Make the overlay movable and resizable
         setMovable(true);
-        setResizable(true);
         setSnappable(true);
-
-        panelComponent.setBackgroundColor(BACKGROUND_COLOR);
-        panelComponent.setBorder(new Rectangle(2, 2, 2, 2));
-        panelComponent.setPreferredSize(new Dimension(ComponentConstants.STANDARD_WIDTH, 0));
     }
 
     @Override
@@ -79,30 +64,17 @@ public class BingoCodewordOverlay extends Overlay {
             return null;
         }
 
-        panelComponent.getChildren().clear();
-
-        // Get team name
-        String teamName = state.getUserTeam() != null ? state.getUserTeam().getName() : state.getName();
-
-        // Add team name as title
-        panelComponent.getChildren().add(TitleComponent.builder()
-                .text(teamName)
-                .color(TITLE_COLOR)
+        // Build compact single-line display
+        panelComponent.getChildren().add(LineComponent.builder()
+                .left(codeword)
+                .leftColor(CODEWORD_COLOR)
                 .build());
 
-        // Add separator line
-        panelComponent.getChildren().add(TitleComponent.builder()
-                .text("────────")
-                .color(SEPARATOR_COLOR)
-                .build());
+        // Size the panel to fit the text
+        panelComponent.setPreferredSize(new Dimension(
+                graphics.getFontMetrics().stringWidth(codeword) + 10, 0));
 
-        // Add codeword prominently
-        panelComponent.getChildren().add(TitleComponent.builder()
-                .text(codeword)
-                .color(CODEWORD_COLOR)
-                .build());
-
-        return panelComponent.render(graphics);
+        return super.render(graphics);
     }
 
     /**

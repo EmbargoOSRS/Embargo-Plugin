@@ -107,6 +107,17 @@ public class BingoManager {
     private volatile List<BingoState> currentStates = new CopyOnWriteArrayList<>();
 
     /**
+     * Gets the [Embargo] tag with the configured color for chat messages.
+     *
+     * @return the formatted [Embargo] tag
+     */
+    private String getEmbargoTag() {
+        java.awt.Color color = config.embargoMessageColor();
+        String hex = String.format("%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue());
+        return "<col=" + hex + ">[Embargo]</col>";
+    }
+
+    /**
      * Gets the first bingo state (for backwards compatibility).
      * @return the first bingo state, or null if none
      * @deprecated Use {@link #getCurrentStates()} instead
@@ -641,6 +652,17 @@ public class BingoManager {
                 }
             }
 
+            // Parse item groups (for grouped tiles)
+            List<BingoItemGroup> itemGroups = new ArrayList<>();
+            if (obj.has("itemGroups") && obj.get("itemGroups").isJsonArray()) {
+                for (JsonElement groupElement : obj.getAsJsonArray("itemGroups")) {
+                    BingoItemGroup group = parseItemGroup(groupElement.getAsJsonObject());
+                    if (group != null) {
+                        itemGroups.add(group);
+                    }
+                }
+            }
+
             return BingoTile.builder()
                     .id(id)
                     .bingoBoardId(bingoBoardId)
@@ -653,6 +675,7 @@ public class BingoManager {
                     .tileType(BingoTileType.fromValue(tileTypeStr))
                     .requiredCount(requiredCount)
                     .itemRequirements(itemRequirements)
+                    .itemGroups(itemGroups)
                     .build();
         } catch (Exception e) {
             log.debug("Error parsing tile: {}", e.getMessage());
@@ -664,6 +687,9 @@ public class BingoManager {
         try {
             return BingoItemRequirement.builder()
                     .id(obj.has("id") ? obj.get("id").getAsInt() : 0)
+                    .itemGroupId(obj.has("itemGroupId") && !obj.get("itemGroupId").isJsonNull()
+                            ? obj.get("itemGroupId").getAsInt()
+                            : null)
                     .itemId(obj.get("itemId").getAsInt())
                     .itemName(obj.has("itemName") ? obj.get("itemName").getAsString() : "")
                     .requiredQuantity(obj.has("requiredQuantity") ? obj.get("requiredQuantity").getAsInt() : 1)
@@ -674,6 +700,33 @@ public class BingoManager {
                     .build();
         } catch (Exception e) {
             log.debug("Error parsing item requirement: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private BingoItemGroup parseItemGroup(JsonObject obj) {
+        try {
+            // Parse items within the group
+            List<BingoItemRequirement> items = new ArrayList<>();
+            if (obj.has("items") && obj.get("items").isJsonArray()) {
+                for (JsonElement itemElement : obj.getAsJsonArray("items")) {
+                    BingoItemRequirement item = parseItemRequirement(itemElement.getAsJsonObject());
+                    if (item != null) {
+                        items.add(item);
+                    }
+                }
+            }
+
+            return BingoItemGroup.builder()
+                    .id(obj.has("id") ? obj.get("id").getAsInt() : 0)
+                    .bingoTileId(obj.has("bingoTileId") ? obj.get("bingoTileId").getAsInt() : 0)
+                    .groupName(obj.has("groupName") ? obj.get("groupName").getAsString() : "")
+                    .requiredCount(obj.has("requiredCount") ? obj.get("requiredCount").getAsInt() : 1)
+                    .sortOrder(obj.has("sortOrder") ? obj.get("sortOrder").getAsInt() : 0)
+                    .items(items)
+                    .build();
+        } catch (Exception e) {
+            log.debug("Error parsing item group: {}", e.getMessage());
             return null;
         }
     }
@@ -798,8 +851,13 @@ public class BingoManager {
             for (BingoState state : trackingStates) {
                 Set<Integer> matchingTileIds = state.getTileIdsForItem(itemId);
                 if (!matchingTileIds.isEmpty()) {
-                    // Submit drop for each matching tile
+                    // Submit drop for each matching tile (skip already completed tiles)
                     for (int tileId : matchingTileIds) {
+                        BingoTeamTileProgress progress = state.getProgress(tileId);
+                        if (progress != null && progress.isCompleted()) {
+                            log.debug("Skipping drop for already completed tile {}", tileId);
+                            continue;
+                        }
                         submitDrop(state, tileId, itemId, itemName, itemStack.getQuantity(), source, false, false);
                     }
                 }
@@ -854,6 +912,13 @@ public class BingoManager {
         for (BingoState state : trackingStates) {
             for (BingoTile tile : state.getTilesByPosition()) {
                 if (tile.getTileType() == BingoTileType.PET) {
+                    // Skip already completed tiles
+                    BingoTeamTileProgress progress = state.getProgress(tile.getId());
+                    if (progress != null && progress.isCompleted()) {
+                        log.debug("Skipping pet drop for already completed tile {}", tile.getId());
+                        continue;
+                    }
+
                     BingoDropSubmission submission = BingoDropSubmission.builder()
                             .bingoBoardId(state.getId())
                             .tileId(tile.getId())
@@ -897,6 +962,12 @@ public class BingoManager {
         // Check all active bingo states for matching item requirements
         for (BingoState state : trackingStates) {
             for (BingoTile tile : state.getTilesByPosition()) {
+                // Skip already completed tiles
+                BingoTeamTileProgress progress = state.getProgress(tile.getId());
+                if (progress != null && progress.isCompleted()) {
+                    continue;
+                }
+
                 // Check if any item requirement name matches
                 for (BingoItemRequirement req : tile.getItemRequirements()) {
                     if (req.getItemName() != null && req.getItemName().equalsIgnoreCase(itemName)) {
@@ -1034,7 +1105,7 @@ public class BingoManager {
         client.addChatMessage(
                 ChatMessageType.GAMEMESSAGE,
                 "",
-                "<col=ff9000>[Embargo]</col> <col=ffffff>" + rsn +
+                getEmbargoTag() + " <col=ffffff>" + rsn +
                         "</col> has made progress on <col=00ff00>" + tileName +
                         "</col> for " + teamName + "!",
                 null);
@@ -1063,16 +1134,25 @@ public class BingoManager {
      * Fetches completions for a specific bingo board.
      */
     private void fetchCompletionsForBoard(int boardId) {
-        long lastFetch = lastCompletionsFetchTime.get();
-        String url = BINGO_COMPLETIONS_ENDPOINT;
-        if (lastFetch > 0) {
-            url += "?since=" + lastFetch;
+        if (client == null || client.getLocalPlayer() == null) {
+            return;
         }
 
-        url += (lastFetch > 0 ? "&" : "?") + "boardId=" + boardId;
+        String playerName = client.getLocalPlayer().getName();
+        if (playerName == null || playerName.isEmpty()) {
+            return;
+        }
+
+        long lastFetch = lastCompletionsFetchTime.get();
+        StringBuilder urlBuilder = new StringBuilder(BINGO_COMPLETIONS_ENDPOINT);
+        urlBuilder.append("?rsn=").append(playerName);
+        urlBuilder.append("&boardId=").append(boardId);
+        if (lastFetch > 0) {
+            urlBuilder.append("&since=").append(lastFetch);
+        }
 
         Request request = new Request.Builder()
-                .url(url)
+                .url(urlBuilder.toString())
                 .get()
                 .build();
 
@@ -1146,16 +1226,19 @@ public class BingoManager {
         }
 
         clientThread.invokeLater(() -> {
+            String tag = getEmbargoTag();
             String message;
             if ("xp".equalsIgnoreCase(completion.getCompletionType())) {
                 message = String.format(
-                        "<col=ff9000>[Embargo]</col> <col=ffffff>%s</col> completed XP tile <col=00ff00>%s</col> for %s!",
+                        "%s <col=ffffff>%s</col> completed XP tile <col=00ff00>%s</col> for %s!",
+                        tag,
                         completion.getCompletedByRsn(),
                         completion.getTileTitle(),
                         completion.getTeamName());
             } else {
                 message = String.format(
-                        "<col=ff9000>[Embargo]</col> <col=ffffff>%s</col> has completed <col=00ff00>%s</col> for %s!",
+                        "%s <col=ffffff>%s</col> has completed <col=00ff00>%s</col> for %s!",
+                        tag,
                         completion.getCompletedByRsn(),
                         completion.getTileTitle(),
                         completion.getTeamName());
@@ -1225,17 +1308,20 @@ public class BingoManager {
         }
 
         clientThread.invokeLater(() -> {
+            String tag = getEmbargoTag();
             for (BingoState state : activeStates) {
                 String timeRemaining = state.getFormattedTimeRemaining();
                 String message;
                 if (isFirstLogin) {
                     message = String.format(
-                            "<col=ff9000>[Embargo]</col> <col=ffffff>%s</col> is active! It ends in <col=00ff00>%s</col>.",
+                            "%s <col=ffffff>%s</col> is active! It ends in <col=00ff00>%s</col>.",
+                            tag,
                             state.getName(),
                             timeRemaining);
                 } else {
                     message = String.format(
-                            "<col=ff9000>[Embargo]</col> <col=ffffff>%s</col> ends in <col=00ff00>%s</col>.",
+                            "%s <col=ffffff>%s</col> ends in <col=00ff00>%s</col>.",
+                            tag,
                             state.getName(),
                             timeRemaining);
                 }

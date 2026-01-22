@@ -146,6 +146,17 @@ public interface EmbargoConfig extends Config
         return true;
     }
 
+    @ConfigItem(
+            keyName = "embargoMessageColor",
+            name = "[Embargo] Tag Color",
+            description = "The color of the [Embargo] tag in chat messages",
+            position = 5,
+            section = chatAlertSettings
+    )
+    default Color embargoMessageColor() {
+        return new Color(255, 144, 0);
+    }
+
     @ConfigSection(
             name = "Bingo",
             description = "Settings for bingo event tracking and display",

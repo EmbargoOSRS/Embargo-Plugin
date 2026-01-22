@@ -75,25 +75,52 @@ public class BingoTile {
     private final List<BingoItemRequirement> itemRequirements = Collections.emptyList();
 
     /**
+     * Item groups for grouped tiles (AND/OR logic).
+     * Only populated for tiles with tileType = GROUPED.
+     */
+    @Builder.Default
+    private final List<BingoItemGroup> itemGroups = Collections.emptyList();
+
+    /**
      * Gets all item IDs that can contribute to this tile's completion.
+     * Includes items from both direct requirements and item groups.
      *
      * @return a set of item IDs
      */
     public Set<Integer> getValidItemIds() {
-        return itemRequirements.stream()
+        Set<Integer> ids = itemRequirements.stream()
                 .map(BingoItemRequirement::getItemId)
                 .collect(Collectors.toSet());
+
+        // Also include items from all groups
+        for (BingoItemGroup group : itemGroups) {
+            ids.addAll(group.getItemIds());
+        }
+
+        return ids;
     }
 
     /**
      * Checks if a given item ID can contribute to this tile.
+     * Checks both direct requirements and item groups.
      *
      * @param itemId the item ID to check
      * @return true if the item can contribute to tile completion
      */
     public boolean acceptsItem(int itemId) {
-        return itemRequirements.stream()
-                .anyMatch(req -> req.getItemId() == itemId);
+        // Check direct item requirements
+        if (itemRequirements.stream().anyMatch(req -> req.getItemId() == itemId)) {
+            return true;
+        }
+
+        // Check item groups
+        for (BingoItemGroup group : itemGroups) {
+            if (group.containsItem(itemId)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

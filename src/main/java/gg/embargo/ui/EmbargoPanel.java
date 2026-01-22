@@ -138,6 +138,12 @@ public class EmbargoPanel extends PluginPanel {
                 + "</span></body></html>";
     }
 
+    private String getEmbargoTag() {
+        java.awt.Color color = config.embargoMessageColor();
+        String hex = String.format("%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue());
+        return "<col=" + hex + ">[Embargo]</col>";
+    }
+
     /**
      * Creates a styled label with smallFont, light gray color, and left alignment
      */
@@ -734,7 +740,7 @@ public class EmbargoPanel extends PluginPanel {
             client.addChatMessage(
                     net.runelite.api.ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> Active bounty: <col=ffffff>" + target
+                    getEmbargoTag() + " Active bounty: <col=ffffff>" + target
                             + "</col>! Check the side panel for details.",
                     null);
         });
@@ -861,7 +867,7 @@ public class EmbargoPanel extends PluginPanel {
             client.addChatMessage(
                     net.runelite.api.ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> New poll: <col=ffffff>" + title
+                    getEmbargoTag() + " New poll: <col=ffffff>" + title
                             + "</col>! Check the side panel or Discord to vote.",
                     null);
         });
@@ -1013,7 +1019,7 @@ public class EmbargoPanel extends PluginPanel {
             client.addChatMessage(
                     net.runelite.api.ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> Active " + eventType + ": <col=ffffff>" + formattedMetric
+                    getEmbargoTag() + " Active " + eventType + ": <col=ffffff>" + formattedMetric
                             + "</col>. Check the side panel for details.",
                     null);
         });

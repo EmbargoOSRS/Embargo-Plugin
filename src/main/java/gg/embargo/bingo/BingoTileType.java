@@ -46,7 +46,15 @@ public enum BingoTileType {
      * A kill count milestone must be reached
      */
     @SerializedName("kc")
-    KC("kc");
+    KC("kc"),
+
+    /**
+     * Grouped items with AND/OR logic (e.g., "4 from Blood Moon AND 4 from Eclipse Moon")
+     * Items within a group use OR logic (any item counts toward the group's required count).
+     * Groups within a tile use AND logic (all groups must be satisfied).
+     */
+    @SerializedName("grouped")
+    GROUPED("grouped");
 
     private final String value;
 

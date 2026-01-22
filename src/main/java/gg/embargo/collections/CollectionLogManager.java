@@ -116,6 +116,12 @@ public class CollectionLogManager {
         this.eventBus = eventBus;
     }
 
+    private String getEmbargoTag() {
+        java.awt.Color color = config.embargoMessageColor();
+        String hex = String.format("%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue());
+        return "<col=" + hex + ">[Embargo]</col>";
+    }
+
     public void startUp(SyncButtonManager mainSyncButtonManager) {
         eventBus.register(this);
         manifestManager.getLatestManifest();
@@ -278,13 +284,13 @@ public class CollectionLogManager {
                     if (!response.isSuccessful()) {
                         log.debug("Failed to submit: {}", response.code());
                         clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
-                                "<col=ff9000>[Embargo]</col> Failed to upload collection log data.", null));
+                                getEmbargoTag() + " Failed to upload collection log data.", null));
                         return;
                     }
                     merge(old, delta);
                     cyclesSinceSuccessfulCall = 0;
                     clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
-                            "<col=ff9000>[Embargo]</col> Collection log synced successfully.", null));
+                            getEmbargoTag() + " Collection log synced successfully.", null));
                 } finally {
                     response.close();
                 }

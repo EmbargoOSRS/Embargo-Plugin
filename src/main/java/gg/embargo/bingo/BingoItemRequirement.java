@@ -22,6 +22,13 @@ public class BingoItemRequirement {
     private final int id;
 
     /**
+     * The item group this requirement belongs to (for grouped tiles).
+     * Null or 0 if not part of a group.
+     */
+    @Builder.Default
+    private final Integer itemGroupId = null;
+
+    /**
      * The OSRS item ID that satisfies this requirement
      */
     private final int itemId;
