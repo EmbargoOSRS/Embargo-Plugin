@@ -1029,7 +1029,7 @@ public class BingoManager {
         // Send local announcement
         BingoTile tile = state.getTile(tileId);
         if (tile != null) {
-            announceLocalDrop(playerName, tile.getTitle(), state.getUserTeam());
+            announceLocalDrop(playerName, tile.getTitle(), itemName, state.getUserTeam());
         }
     }
 
@@ -1089,7 +1089,7 @@ public class BingoManager {
     /**
      * Announces a local drop in chat.
      */
-    private void announceLocalDrop(String rsn, String tileName, @Nullable BingoTeam team) {
+    private void announceLocalDrop(String rsn, String tileName, String itemName, @Nullable BingoTeam team) {
         if (client == null || client.getGameState() != GameState.LOGGED_IN) {
             return;
         }
@@ -1107,6 +1107,7 @@ public class BingoManager {
                 "",
                 getEmbargoTag() + " <col=ffffff>" + rsn +
                         "</col> has made progress on <col=00ff00>" + tileName +
+                        "</col> with <col=ffff00>" + itemName +
                         "</col> for " + teamName + "!",
                 null);
     }
