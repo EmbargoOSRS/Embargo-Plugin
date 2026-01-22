@@ -1029,15 +1029,15 @@ public class BingoManager {
 
         String teamName = team != null ? team.getName() : "your team";
 
-        clientThread.invokeLater(() -> {
-            client.addChatMessage(
-                    ChatMessageType.GAMEMESSAGE,
-                    "",
-                    "<col=ff9000>[Embargo]</col> <col=ffffff>" + rsn +
-                            "</col> has made progress on <col=00ff00>" + tileName +
-                            "</col> for " + teamName + "!",
-                    null);
-        });
+        // This method is called from onLootReceived/onChatMessage which already run on the client thread,
+        // so we can add the chat message directly without invokeLater to avoid micro stutters
+        client.addChatMessage(
+                ChatMessageType.GAMEMESSAGE,
+                "",
+                "<col=ff9000>[Embargo]</col> <col=ffffff>" + rsn +
+                        "</col> has made progress on <col=00ff00>" + tileName +
+                        "</col> for " + teamName + "!",
+                null);
     }
 
     /**
