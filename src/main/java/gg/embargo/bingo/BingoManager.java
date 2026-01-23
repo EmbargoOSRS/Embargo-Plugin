@@ -339,6 +339,7 @@ public class BingoManager {
      */
     public boolean shouldTrackDrops() {
         return trackingActive.get()
+                && config.enableBingo()
                 && config.enableBingoTracking()
                 && isEnrolledAndActive();
     }
@@ -349,7 +350,7 @@ public class BingoManager {
      * @return list of bingo states that should track drops
      */
     public List<BingoState> getTrackingStates() {
-        if (!trackingActive.get() || !config.enableBingoTracking()) {
+        if (!trackingActive.get() || !config.enableBingo() || !config.enableBingoTracking()) {
             return Collections.emptyList();
         }
         return getActiveEnrolledStates();

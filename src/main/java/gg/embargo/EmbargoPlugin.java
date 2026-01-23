@@ -186,10 +186,12 @@ public class EmbargoPlugin extends Plugin {
 			npcRenameManager.startUp();
 		}
 
-		// Initialize bingo system
-		bingoManager.startUp();
-		bingoScreenshotManager.startUp();
-		bingoCodewordOverlayManager.startUp();
+		// Initialize bingo system (only if enabled)
+		if (config != null && config.enableBingo()) {
+			bingoManager.startUp();
+			bingoScreenshotManager.startUp();
+			bingoCodewordOverlayManager.startUp();
+		}
 	}
 
 	@Inject
@@ -223,10 +225,12 @@ public class EmbargoPlugin extends Plugin {
 		npcRenameManager.shutDown();
 		commandManager.shutDown();
 
-		// Shutdown bingo system
-		bingoManager.shutDown();
-		bingoScreenshotManager.shutDown();
-		bingoCodewordOverlayManager.shutDown();
+		// Shutdown bingo system (only if enabled)
+		if (config != null && config.enableBingo()) {
+			bingoManager.shutDown();
+			bingoScreenshotManager.shutDown();
+			bingoCodewordOverlayManager.shutDown();
+		}
 	}
 
 	@Subscribe
@@ -277,6 +281,10 @@ public class EmbargoPlugin extends Plugin {
 	}
 
 	private void sendBingoLoginAlert() {
+		if (config == null || !config.enableBingo()) {
+			return;
+		}
+
 		// Only send once per session, but allow re-alerting on re-login
 		boolean isFirstAlert = !bingoAlertSentThisSession;
 		bingoAlertSentThisSession = true;
@@ -310,7 +318,9 @@ public class EmbargoPlugin extends Plugin {
 		skillLevelCache.clear();
 
 		// Clear bingo session state
-		bingoManager.onLogout();
+		if (config != null && config.enableBingo()) {
+			bingoManager.onLogout();
+		}
 		bingoAlertSentThisSession = false;
 	}
 
@@ -509,9 +519,22 @@ public class EmbargoPlugin extends Plugin {
 			}
 		}
 
+		// Handle bingo master switch config change
+		if (event.getKey().equals("enableBingo")) {
+			if (config.enableBingo()) {
+				bingoManager.startUp();
+				bingoScreenshotManager.startUp();
+				bingoCodewordOverlayManager.startUp();
+			} else {
+				bingoManager.shutDown();
+				bingoScreenshotManager.shutDown();
+				bingoCodewordOverlayManager.shutDown();
+			}
+		}
+
 		// Handle bingo tracking config change
 		if (event.getKey().equals("enableBingoTracking")) {
-			if (!config.enableBingoTracking()) {
+			if (config.enableBingo() && !config.enableBingoTracking()) {
 				// Notify server that tracking was disabled
 				bingoManager.notifyTrackingDisabled();
 			}

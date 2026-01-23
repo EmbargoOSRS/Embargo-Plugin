@@ -4,6 +4,7 @@ package gg.embargo.bingo;
 import gg.embargo.EmbargoConfig;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.ui.overlay.OverlayManager;
 
 import javax.inject.Inject;
@@ -23,6 +24,7 @@ import java.util.Set;
 public class BingoCodewordOverlayManager {
 
     private final Client client;
+    private final ClientThread clientThread;
     private final BingoManager bingoManager;
     private final EmbargoConfig config;
     private final OverlayManager overlayManager;
@@ -33,9 +35,10 @@ public class BingoCodewordOverlayManager {
     private final Map<Integer, BingoCodewordOverlay> activeOverlays = new HashMap<>();
 
     @Inject
-    public BingoCodewordOverlayManager(Client client, BingoManager bingoManager,
+    public BingoCodewordOverlayManager(Client client, ClientThread clientThread, BingoManager bingoManager,
                                         EmbargoConfig config, OverlayManager overlayManager) {
         this.client = client;
+        this.clientThread = clientThread;
         this.bingoManager = bingoManager;
         this.config = config;
         this.overlayManager = overlayManager;
@@ -62,9 +65,10 @@ public class BingoCodewordOverlayManager {
 
     /**
      * Called when bingo states change.
+     * Uses clientThread to ensure overlay operations happen on the correct thread.
      */
     private void onBingoStateChange(List<BingoState> states) {
-        updateOverlays();
+        clientThread.invokeLater(this::updateOverlays);
     }
 
     /**

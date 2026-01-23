@@ -165,6 +165,17 @@ public interface EmbargoConfig extends Config
     String bingoSettings = "BingoSettings";
 
     @ConfigItem(
+            keyName = "enableBingo",
+            name = "Enable Bingo",
+            description = "Master switch to enable/disable all bingo functionality including tracking, overlays, and UI",
+            position = 0,
+            section = bingoSettings
+    )
+    default boolean enableBingo() {
+        return true;
+    }
+
+    @ConfigItem(
             keyName = "enableBingoTracking",
             name = "Enable Bingo Tracking",
             description = "Automatically track bingo tile drops and submit them to the server. Disabling this will notify administrators.",
