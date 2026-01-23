@@ -27,6 +27,12 @@ import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.swing.*;
@@ -40,12 +46,16 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Consumer;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import javax.imageio.ImageIO;
@@ -75,6 +85,9 @@ public class EmbargoPanel extends PluginPanel {
 
     @Inject
     private BingoManager bingoManager;
+
+    @Inject
+    private OkHttpClient okHttpClient;
 
     @Setter
     public boolean isLoggedIn = false;
@@ -133,6 +146,9 @@ public class EmbargoPanel extends PluginPanel {
     // Bingo subsection
     private JPanel bingoPanel;
     private final Set<Integer> alertedBingoIds = new HashSet<>();
+
+    // Stored reference to allow removal on shutdown
+    private Consumer<List<BingoState>> bingoStateChangeListener;
 
     // Periodic refresh for events/bounties/polls
     private static final int EVENTS_REFRESH_INTERVAL_MINUTES = 1;
@@ -534,7 +550,15 @@ public class EmbargoPanel extends PluginPanel {
     private static final Color COLOR_GRAY = new Color(0x99, 0x99, 0x99);
 
     // Static cache for bingo tile images (persists across panel refreshes)
-    private static final Map<String, ImageIcon> TILE_IMAGE_CACHE = new ConcurrentHashMap<>();
+    // Use bounded LRU cache to prevent unbounded memory growth
+    private static final int MAX_TILE_IMAGE_CACHE_SIZE = 100;
+    private static final Map<String, ImageIcon> TILE_IMAGE_CACHE = Collections.synchronizedMap(
+            new LinkedHashMap<String, ImageIcon>(MAX_TILE_IMAGE_CACHE_SIZE, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, ImageIcon> eldest) {
+                    return size() > MAX_TILE_IMAGE_CACHE_SIZE;
+                }
+            });
 
     /**
      * Updates the Of The Week panel with the API response
@@ -1158,46 +1182,53 @@ public class EmbargoPanel extends PluginPanel {
             return;
         }
 
-        // Load async if not cached
-        executorService.submit(() -> {
-            try {
-                // Use ImageIO for faster loading than ImageIcon(URL)
-                java.net.URL url = new java.net.URL(imageUrl);
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(3000);
-                conn.setReadTimeout(3000);
-                conn.setRequestProperty("User-Agent", "RuneLite");
+        // Load async if not cached using OkHttp
+        Request request = new Request.Builder()
+                .url(imageUrl)
+                .build();
 
-                BufferedImage originalImage = ImageIO.read(conn.getInputStream());
-                conn.disconnect();
-
-                if (originalImage != null) {
-                    // Scale image using faster method
-                    Image scaledImage = originalImage.getScaledInstance(
-                            iconSize, iconSize, Image.SCALE_SMOOTH);
-
-                    // Convert to BufferedImage for better performance
-                    BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
-                    Graphics2D g2d = bufferedScaled.createGraphics();
-                    g2d.drawImage(scaledImage, 0, 0, null);
-                    g2d.dispose();
-
-                    ImageIcon scaledIcon = new ImageIcon(bufferedScaled);
-
-                    // Cache the scaled icon
-                    TILE_IMAGE_CACHE.put(cacheKey, scaledIcon);
-
-                    SwingUtilities.invokeLater(() -> {
-                        JLabel iconLabel = new JLabel(scaledIcon);
-                        iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
-                        tilePanel.add(iconLabel, BorderLayout.CENTER);
-                        tilePanel.revalidate();
-                        tilePanel.repaint();
-                    });
-                }
-            } catch (Exception e) {
-                // Image failed to load, leave tile as is
+        okHttpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
                 log.debug("Failed to load bingo tile image: {}", imageUrl);
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    if (!response.isSuccessful() || response.body() == null) {
+                        return;
+                    }
+
+                    BufferedImage originalImage = ImageIO.read(response.body().byteStream());
+
+                    if (originalImage != null) {
+                        // Scale image using faster method
+                        Image scaledImage = originalImage.getScaledInstance(
+                                iconSize, iconSize, Image.SCALE_SMOOTH);
+
+                        // Convert to BufferedImage for better performance
+                        BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
+                        Graphics2D g2d = bufferedScaled.createGraphics();
+                        g2d.drawImage(scaledImage, 0, 0, null);
+                        g2d.dispose();
+
+                        ImageIcon scaledIcon = new ImageIcon(bufferedScaled);
+
+                        // Cache the scaled icon
+                        TILE_IMAGE_CACHE.put(cacheKey, scaledIcon);
+
+                        SwingUtilities.invokeLater(() -> {
+                            JLabel iconLabel = new JLabel(scaledIcon);
+                            iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
+                            tilePanel.add(iconLabel, BorderLayout.CENTER);
+                            tilePanel.revalidate();
+                            tilePanel.repaint();
+                        });
+                    }
+                } catch (Exception e) {
+                    log.debug("Failed to process bingo tile image: {}", imageUrl);
+                }
             }
         });
     }
@@ -1212,31 +1243,40 @@ public class EmbargoPanel extends PluginPanel {
             if (imageUrl != null && !imageUrl.isEmpty()) {
                 String cacheKey = imageUrl + "@" + iconSize;
                 if (!TILE_IMAGE_CACHE.containsKey(cacheKey)) {
-                    // Load in background
-                    executorService.submit(() -> {
-                        try {
-                            java.net.URL url = new java.net.URL(imageUrl);
-                            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                            conn.setConnectTimeout(3000);
-                            conn.setReadTimeout(3000);
-                            conn.setRequestProperty("User-Agent", "RuneLite");
+                    // Load in background using OkHttp
+                    Request request = new Request.Builder()
+                            .url(imageUrl)
+                            .build();
 
-                            BufferedImage originalImage = ImageIO.read(conn.getInputStream());
-                            conn.disconnect();
-
-                            if (originalImage != null) {
-                                Image scaledImage = originalImage.getScaledInstance(
-                                        iconSize, iconSize, Image.SCALE_FAST);
-
-                                BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
-                                Graphics2D g2d = bufferedScaled.createGraphics();
-                                g2d.drawImage(scaledImage, 0, 0, null);
-                                g2d.dispose();
-
-                                TILE_IMAGE_CACHE.put(cacheKey, new ImageIcon(bufferedScaled));
-                            }
-                        } catch (Exception e) {
+                    okHttpClient.newCall(request).enqueue(new Callback() {
+                        @Override
+                        public void onFailure(Call call, IOException e) {
                             log.debug("Failed to prefetch bingo tile image: {}", imageUrl);
+                        }
+
+                        @Override
+                        public void onResponse(Call call, Response response) throws IOException {
+                            try (response) {
+                                if (!response.isSuccessful() || response.body() == null) {
+                                    return;
+                                }
+
+                                BufferedImage originalImage = ImageIO.read(response.body().byteStream());
+
+                                if (originalImage != null) {
+                                    Image scaledImage = originalImage.getScaledInstance(
+                                            iconSize, iconSize, Image.SCALE_FAST);
+
+                                    BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
+                                    Graphics2D g2d = bufferedScaled.createGraphics();
+                                    g2d.drawImage(scaledImage, 0, 0, null);
+                                    g2d.dispose();
+
+                                    TILE_IMAGE_CACHE.put(cacheKey, new ImageIcon(bufferedScaled));
+                                }
+                            } catch (Exception e) {
+                                log.debug("Failed to process prefetch bingo tile image: {}", imageUrl);
+                            }
                         }
                     });
                 }
@@ -1559,7 +1599,9 @@ public class EmbargoPanel extends PluginPanel {
         logOut();
 
         // Register listener for bingo state changes to update UI
-        bingoManager.addStateChangeListener(states -> SwingUtilities.invokeLater(this::updateBingoPanel));
+        // Store the listener so we can remove it on shutdown
+        bingoStateChangeListener = states -> SwingUtilities.invokeLater(this::updateBingoPanel);
+        bingoManager.addStateChangeListener(bingoStateChangeListener);
     }
 
     public void updateLoggedIn(boolean scheduled) {
@@ -1832,6 +1874,13 @@ public class EmbargoPanel extends PluginPanel {
     public void reset() {
         stopPeriodicEventsRefresh();
         eventBus.unregister(this);
+
+        // Remove bingo state change listener to prevent memory leak
+        if (bingoStateChangeListener != null) {
+            bingoManager.removeStateChangeListener(bingoStateChangeListener);
+            bingoStateChangeListener = null;
+        }
+
         missingRequirementsPanelX.shutdown();
         this.updateLoggedIn(false);
     }

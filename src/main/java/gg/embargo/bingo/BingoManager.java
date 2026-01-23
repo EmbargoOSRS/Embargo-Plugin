@@ -906,6 +906,9 @@ public class BingoManager {
             return;
         }
 
+        if (client.getLocalPlayer() == null) {
+            return;
+        }
         String playerName = client.getLocalPlayer().getName();
 
         // Check all active bingo states for pet-type tiles
@@ -949,6 +952,10 @@ public class BingoManager {
     private void handleCollectionLogUnlock(String itemName) {
         List<BingoState> trackingStates = getTrackingStates();
         if (trackingStates.isEmpty()) {
+            return;
+        }
+
+        if (client.getLocalPlayer() == null) {
             return;
         }
 
@@ -1004,6 +1011,9 @@ public class BingoManager {
      */
     private void submitDrop(BingoState state, int tileId, int itemId, String itemName,
             int quantity, String source, boolean fromCollectionLog, boolean isPet) {
+        if (client.getLocalPlayer() == null) {
+            return;
+        }
         String playerName = client.getLocalPlayer().getName();
 
         BingoDropSubmission submission = BingoDropSubmission.builder()
