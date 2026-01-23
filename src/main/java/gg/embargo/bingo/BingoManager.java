@@ -1031,15 +1031,22 @@ public class BingoManager {
 
         submitDropAsync(submission);
 
-        // Capture screenshot
-        if (screenshotManager != null && !fromCollectionLog) {
-            screenshotManager.captureAndUpload(state.getId(), tileId, itemId, itemName);
-        }
-
-        // Send local announcement
+        // Only capture screenshot and announce if the tile still needs progress
         BingoTile tile = state.getTile(tileId);
         if (tile != null) {
-            announceLocalDrop(playerName, tile.getTitle(), itemName, state.getUserTeam());
+            BingoTeamTileProgress progress = state.getProgress(tileId);
+            int currentCount = progress != null ? progress.getCurrentCount() : 0;
+            int requiredCount = tile.getRequiredCount();
+
+            if (currentCount < requiredCount) {
+                // Capture screenshot
+                if (screenshotManager != null && !fromCollectionLog) {
+                    screenshotManager.captureAndUpload(state.getId(), tileId, itemId, itemName);
+                }
+
+                // Send local announcement
+                announceLocalDrop(playerName, tile.getTitle(), itemName, state.getUserTeam());
+            }
         }
     }
 
