@@ -16,6 +16,7 @@ import gg.embargo.bingo.BingoItemGroup;
 import gg.embargo.bingo.BingoTeamTileProgress;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.client.callback.ClientThread;
@@ -54,6 +55,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 import java.util.concurrent.ScheduledFuture;
@@ -576,8 +578,8 @@ public class EmbargoPanel extends PluginPanel {
         }
 
         // Separate ongoing and upcoming events
-        java.util.List<JsonObject> ongoingEvents = new ArrayList<>();
-        java.util.List<JsonObject> upcomingEvents = new ArrayList<>();
+        List<JsonObject> ongoingEvents = new ArrayList<>();
+        List<JsonObject> upcomingEvents = new ArrayList<>();
 
         for (JsonElement element : events) {
             JsonObject event = element.getAsJsonObject();
@@ -695,8 +697,8 @@ public class EmbargoPanel extends PluginPanel {
         }
 
         JsonArray bounties = response.getAsJsonArray("bounties");
-        java.util.List<JsonObject> activeBounties = new ArrayList<>();
-        java.util.List<JsonObject> recentBounties = new ArrayList<>();
+        List<JsonObject> activeBounties = new ArrayList<>();
+        List<JsonObject> recentBounties = new ArrayList<>();
 
         // Separate active and completed bounties
         for (JsonElement element : bounties) {
@@ -805,7 +807,7 @@ public class EmbargoPanel extends PluginPanel {
 
         clientThread.invokeLater(() -> {
             client.addChatMessage(
-                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    ChatMessageType.GAMEMESSAGE,
                     "",
                     getEmbargoTag() + " Active bounty: <col=ffffff>" + target
                             + "</col>! Check the side panel for details.",
@@ -932,7 +934,7 @@ public class EmbargoPanel extends PluginPanel {
 
         clientThread.invokeLater(() -> {
             client.addChatMessage(
-                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    ChatMessageType.GAMEMESSAGE,
                     "",
                     getEmbargoTag() + " New poll: <col=ffffff>" + title
                             + "</col>! Check the side panel or Discord to vote.",
@@ -956,7 +958,7 @@ public class EmbargoPanel extends PluginPanel {
     private void updateBingoPanel() {
         bingoPanel.removeAll();
 
-        java.util.List<BingoState> states = bingoManager.getCurrentStates();
+        List<BingoState> states = bingoManager.getCurrentStates();
 
         if (states == null || states.isEmpty()) {
             bingoPanel.add(createSmallLabel("No active bingo"));
@@ -966,9 +968,9 @@ public class EmbargoPanel extends PluginPanel {
         }
 
         // Filter to only active bingos
-        java.util.List<BingoState> activeStates = states.stream()
+        List<BingoState> activeStates = states.stream()
                 .filter(BingoState::isActive)
-                .collect(java.util.stream.Collectors.toList());
+                .collect(Collectors.toList());
 
         if (activeStates.isEmpty()) {
             bingoPanel.add(createSmallLabel("No active bingo"));
@@ -1072,7 +1074,7 @@ public class EmbargoPanel extends PluginPanel {
         gridPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         // Get tiles sorted by position
-        java.util.List<BingoTile> sortedTiles = state.getTilesByPosition();
+        List<BingoTile> sortedTiles = state.getTilesByPosition();
 
         // Calculate tile size based on panel width (aim for ~180px total width)
         int tileSize = Math.max(28, (180 - (boardSize + 1) * 2) / boardSize);
@@ -1083,9 +1085,6 @@ public class EmbargoPanel extends PluginPanel {
         int gridHeight = boardSize * tileSize + (boardSize + 1) * 2;
         gridPanel.setPreferredSize(new Dimension(gridWidth, gridHeight));
         gridPanel.setMaximumSize(new Dimension(gridWidth, gridHeight));
-
-        // Pre-fetch images in background to warm up cache
-        prefetchTileImages(state, iconSize);
 
         for (int i = 0; i < totalTiles; i++) {
             // Find tile at this position
@@ -1234,57 +1233,6 @@ public class EmbargoPanel extends PluginPanel {
     }
 
     /**
-     * Pre-fetches all tile images for a bingo state in parallel.
-     * Call this when bingo state is loaded to warm up the cache.
-     */
-    private void prefetchTileImages(BingoState state, int iconSize) {
-        for (BingoTile tile : state.getTiles().values()) {
-            String imageUrl = tile.getImageUrl();
-            if (imageUrl != null && !imageUrl.isEmpty()) {
-                String cacheKey = imageUrl + "@" + iconSize;
-                if (!TILE_IMAGE_CACHE.containsKey(cacheKey)) {
-                    // Load in background using OkHttp
-                    Request request = new Request.Builder()
-                            .url(imageUrl)
-                            .build();
-
-                    okHttpClient.newCall(request).enqueue(new Callback() {
-                        @Override
-                        public void onFailure(Call call, IOException e) {
-                            log.debug("Failed to prefetch bingo tile image: {}", imageUrl);
-                        }
-
-                        @Override
-                        public void onResponse(Call call, Response response) throws IOException {
-                            try (response) {
-                                if (!response.isSuccessful() || response.body() == null) {
-                                    return;
-                                }
-
-                                BufferedImage originalImage = ImageIO.read(response.body().byteStream());
-
-                                if (originalImage != null) {
-                                    Image scaledImage = originalImage.getScaledInstance(
-                                            iconSize, iconSize, Image.SCALE_FAST);
-
-                                    BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
-                                    Graphics2D g2d = bufferedScaled.createGraphics();
-                                    g2d.drawImage(scaledImage, 0, 0, null);
-                                    g2d.dispose();
-
-                                    TILE_IMAGE_CACHE.put(cacheKey, new ImageIcon(bufferedScaled));
-                                }
-                            } catch (Exception e) {
-                                log.debug("Failed to process prefetch bingo tile image: {}", imageUrl);
-                            }
-                        }
-                    });
-                }
-            }
-        }
-    }
-
-    /**
      * Creates a small legend item with a colored square and label
      */
     private JPanel createLegendItem(Color color, String text) {
@@ -1314,7 +1262,7 @@ public class EmbargoPanel extends PluginPanel {
      */
     private void addInProgressTilesToPanel(BingoState state) {
         // Get tiles that are partial (in progress)
-        java.util.List<BingoTile> partialTiles = new ArrayList<>();
+        List<BingoTile> partialTiles = new ArrayList<>();
         for (BingoTile tile : state.getTiles().values()) {
             BingoTeamTileProgress progress = state.getProgress(tile.getId());
             if (progress != null && progress.getStatus() == BingoTileStatus.PARTIAL) {
@@ -1421,7 +1369,7 @@ public class EmbargoPanel extends PluginPanel {
 
         clientThread.invokeLater(() -> {
             client.addChatMessage(
-                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    ChatMessageType.GAMEMESSAGE,
                     "",
                     getEmbargoTag() + " Active " + eventType + ": <col=ffffff>" + formattedMetric
                             + "</col>. Check the side panel for details.",
@@ -1717,8 +1665,8 @@ public class EmbargoPanel extends PluginPanel {
                             // Use executorService to perform all item ID lookups asynchronously
                             executorService.execute(() -> {
                                 // Pre-resolve all item IDs off the client thread (these are blocking calls)
-                                java.util.List<Object[]> dynamicItemsData = new ArrayList<>();
-                                java.util.List<Object[]> regularItemsData = new ArrayList<>();
+                                List<Object[]> dynamicItemsData = new ArrayList<>();
+                                List<Object[]> regularItemsData = new ArrayList<>();
 
                                 for (JsonElement mi : missingGearReqs) {
                                     String itemName = mi.getAsString();
@@ -1741,7 +1689,7 @@ public class EmbargoPanel extends PluginPanel {
                                     }
                                 }
 
-                                java.util.List<Integer> untradableIds = new ArrayList<>();
+                                List<Integer> untradableIds = new ArrayList<>();
                                 for (JsonElement mu : missingUntradableItemIdReqs) {
                                     if (alreadyProcessed.contains(mu.getAsString())) {
                                         log.debug("{} already added, skipping missingUntradableItemIdReqs",
