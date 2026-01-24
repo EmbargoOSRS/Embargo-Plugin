@@ -78,6 +78,12 @@ public class SyncButtonManager {
         eventBus.register(this);
     }
 
+    private String getEmbargoTag() {
+        java.awt.Color color = config.embargoMessageColor();
+        String hex = String.format("%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue());
+        return "<col=" + hex + ">[Embargo]</col>";
+    }
+
     public void shutDown() {
         eventBus.unregister(this);
     }
@@ -107,7 +113,7 @@ public class SyncButtonManager {
             client.addChatMessage(
                     ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> Sync on cooldown. Try again in " + secondsRemaining + " seconds.",
+                    getEmbargoTag() + " Sync on cooldown. Try again in " + secondsRemaining + " seconds.",
                     null);
             return;
         }
@@ -121,7 +127,7 @@ public class SyncButtonManager {
         client.addChatMessage(
                 ChatMessageType.GAMEMESSAGE,
                 "",
-                "<col=ff9000>[Embargo]</col> Syncing your collection log...",
+                getEmbargoTag() + " Syncing your collection log...",
                 null);
     }
 

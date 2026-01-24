@@ -135,10 +135,83 @@ public interface EmbargoConfig extends Config
         return true;
     }
 
+    @ConfigItem(
+            keyName = "enableBingoAlerts",
+            name = "Bingo Alerts",
+            description = "Show chat messages for bingo events, tile completions, and status updates",
+            position = 4,
+            section = chatAlertSettings
+    )
+    default boolean enableBingoAlerts() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "embargoMessageColor",
+            name = "[Embargo] Tag Color",
+            description = "The color of the [Embargo] tag in chat messages",
+            position = 5,
+            section = chatAlertSettings
+    )
+    default Color embargoMessageColor() {
+        return new Color(255, 144, 0);
+    }
+
+    @ConfigSection(
+            name = "Bingo",
+            description = "Settings for bingo event tracking and display",
+            position = 5
+    )
+    String bingoSettings = "BingoSettings";
+
+    @ConfigItem(
+            keyName = "enableBingo",
+            name = "Enable Bingo",
+            description = "Master switch to enable/disable all bingo functionality including tracking, overlays, and UI",
+            position = 0,
+            section = bingoSettings
+    )
+    default boolean enableBingo() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "enableBingoTracking",
+            name = "Enable Bingo Tracking",
+            description = "Automatically track bingo tile drops and submit them to the server. Disabling this will notify administrators.",
+            position = 1,
+            section = bingoSettings
+    )
+    default boolean enableBingoTracking() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "showBingoCodeword",
+            name = "Show Bingo Codeword",
+            description = "Display the secret bingo codeword overlay when enrolled in an active bingo",
+            position = 2,
+            section = bingoSettings
+    )
+    default boolean showBingoCodeword() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "bingoScreenshots",
+            name = "Auto-capture Screenshots",
+            description = "Automatically capture and upload screenshots when obtaining bingo tile items",
+            position = 3,
+            section = bingoSettings
+    )
+    default boolean bingoScreenshots() {
+        return true;
+    }
+
     @ConfigSection(
             name = "Chat Commands",
             description = "Section that houses Chat Command options",
-            position = 5
+            position = 6
     )
     String chatCommandSettings = "ChatCommandSettings";
 

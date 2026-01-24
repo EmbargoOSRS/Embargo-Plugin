@@ -551,6 +551,12 @@ public class MissingRequirementsPanel extends PluginPanel {
             }
 
             BufferedImage icon = itemManager.getImage(itemId);
+            if (icon == null) {
+                // Fallback to letter icon if image not available
+                log.debug("No icon found for itemId: {}, using letter fallback", itemId);
+                String letter = getLetterForItem(itemName);
+                return createLetterIcon(letter);
+            }
             BufferedImage resizedIcon = ImageUtil.resizeImage(icon, CELL_SIZE, CELL_SIZE);
             iconCache.put(itemId, resizedIcon);
             return resizedIcon;
