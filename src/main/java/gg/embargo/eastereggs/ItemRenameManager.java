@@ -3,6 +3,7 @@ package gg.embargo.eastereggs;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import gg.embargo.EmbargoConfig;
+import gg.embargo.manifest.Manifest;
 import gg.embargo.manifest.ManifestManager;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
@@ -32,7 +33,8 @@ public class ItemRenameManager {
         this.manifestManager = manifestManager;
     }
 
-    private boolean manifestFetchAttempted = false;
+    // Track which manifest version we've parsed to avoid redundant re-parsing
+    private float lastParsedManifestVersion = -1;
 
     private static final Set<MenuAction> ITEM_MENU_ACTIONS = ImmutableSet.of(
             MenuAction.GROUND_ITEM_FIRST_OPTION, MenuAction.GROUND_ITEM_SECOND_OPTION,
@@ -57,27 +59,24 @@ public class ItemRenameManager {
 
     @Subscribe
     public void onMenuEntryAdded(MenuEntryAdded event) {
-        // Only process if easter eggs are enabled
         if (!featureEnabled()) {
             return;
         }
 
-        if (manifestManager.getManifest() == null) {
-            manifestManager.getLatestManifest();
+        MenuEntry entry = event.getMenuEntry();
+        if (!ITEM_MENU_ACTIONS.contains(entry.getType())) {
             return;
         }
 
-        // Check if manifest is empty and fetch if needed
-        if (manifestManager.getManifest().getItemRenames() == null) {
-            manifestManager.getLatestManifest();
+        // Only parse manifest if version changed (avoid parsing on every menu event)
+        parseManifestIfNeeded();
+
+        // Skip if no remaps configured
+        if (customItemRemap.isEmpty()) {
+            return;
         }
 
-        parseManifest();
-
-        MenuEntry entry = event.getMenuEntry();
-        if (ITEM_MENU_ACTIONS.contains(entry.getType())) {
-            remapMenuEntryText(entry, customItemRemap);
-        }
+        remapMenuEntryText(entry, customItemRemap);
     }
 
     public void startUp() {
@@ -92,6 +91,7 @@ public class ItemRenameManager {
 
     public void shutDown() {
         customItemRemap.clear();
+        lastParsedManifestVersion = -1;
         eventBus.unregister(this);
     }
 
@@ -100,24 +100,34 @@ public class ItemRenameManager {
         customItemRemap.putAll(DEFAULT_ITEM_REMAP);
     }
 
-    public void parseManifest() {
-        if (manifestManager.getManifest().getItemRenames() == null
-                || manifestManager.getManifest().getItemRenames().isEmpty()) {
-            if (!manifestFetchAttempted) {
-                log.debug("manifest.itemRenames is empty, attempting to refetch");
-            }
+    /**
+     * Parses the manifest only if the version has changed.
+     * This avoids expensive map rebuilds on every menu event.
+     */
+    private void parseManifestIfNeeded() {
+        Manifest manifest = manifestManager.getManifest();
+        if (manifest == null) {
             return;
         }
 
-        // Clear and repopulate to prevent unbounded accumulation
+        // Skip if we've already parsed this version
+        float currentVersion = manifest.getVersion();
+        if (currentVersion == lastParsedManifestVersion && !customItemRemap.isEmpty()) {
+            return;
+        }
+
+        Map<String, String> itemRenames = manifest.getItemRenames();
+        if (itemRenames == null || itemRenames.isEmpty()) {
+            return;
+        }
+
+        // Version changed or first parse - rebuild the map
         customItemRemap.clear();
         customItemRemap.putAll(DEFAULT_ITEM_REMAP);
+        customItemRemap.putAll(itemRenames);
+        lastParsedManifestVersion = currentVersion;
 
-        for (Map.Entry<String, String> entry : manifestManager.getManifest().getItemRenames().entrySet()) {
-            String originalName = entry.getKey();
-            String newName = entry.getValue();
-            customItemRemap.put(originalName, newName);
-        }
+        log.debug("Parsed item renames from manifest v{}, {} entries", currentVersion, itemRenames.size());
     }
 
     /**

@@ -3,6 +3,7 @@ package gg.embargo.eastereggs;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import gg.embargo.EmbargoConfig;
+import gg.embargo.manifest.Manifest;
 import gg.embargo.manifest.ManifestManager;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.MenuAction;
@@ -45,7 +46,8 @@ public class NPCRenameManager {
             .build();
     private final Map<String, String> customNPCRemaps = new HashMap<>();
 
-    private boolean manifestFetchAttempted = false;
+    // Track which manifest version we've parsed to avoid redundant re-parsing
+    private float lastParsedManifestVersion = -1;
 
     public boolean featureEnabled() {
         return config.enableClanEasterEggs() && config.enableNpcRenames();
@@ -53,28 +55,24 @@ public class NPCRenameManager {
 
     @Subscribe
     protected void onMenuEntryAdded(MenuEntryAdded event) {
-
         if (!featureEnabled()) {
             return;
         }
 
-        if (manifestManager.getManifest() == null) {
-            manifestManager.getLatestManifest();
+        MenuEntry entry = event.getMenuEntry();
+        if (!NPC_MENU_ACTIONS.contains(entry.getType())) {
             return;
         }
 
-        // Check if manifest is empty and fetch if needed
-        if (manifestManager.getManifest().getItemRenames() == null) {
-            manifestManager.getLatestManifest();
+        // Only parse manifest if version changed (avoid parsing on every menu event)
+        parseManifestIfNeeded();
+
+        // Skip if no remaps configured
+        if (customNPCRemaps.isEmpty()) {
+            return;
         }
 
-        parseManifest();
-        MenuEntry entry = event.getMenuEntry();
-
-        if (NPC_MENU_ACTIONS.contains(entry.getType())) {
-            remapMenuEntryText(entry, (HashMap<String, String>) customNPCRemaps); // Use customNPCRemaps instead of
-                                                                                  // npcListHashMap
-        }
+        remapMenuEntryText(entry, customNPCRemaps);
     }
 
     public void startUp() {
@@ -89,6 +87,7 @@ public class NPCRenameManager {
 
     public void shutDown() {
         customNPCRemaps.clear();
+        lastParsedManifestVersion = -1;
         eventBus.unregister(this);
     }
 
@@ -97,37 +96,42 @@ public class NPCRenameManager {
         customNPCRemaps.putAll(DEFAULT_NPC_RENAMES);
     }
 
-    public void parseManifest() {
-        if (manifestManager.getManifest().getNpcRenames() == null
-                || manifestManager.getManifest().getNpcRenames().isEmpty()) {
-            if (!manifestFetchAttempted) {
-                manifestFetchAttempted = true;
-                manifestManager.getLatestManifest();
-                log.debug("manifest.npcRenames is empty, attempting to refetch");
-            }
+    /**
+     * Parses the manifest only if the version has changed.
+     * This avoids expensive map rebuilds on every menu event.
+     */
+    private void parseManifestIfNeeded() {
+        Manifest manifest = manifestManager.getManifest();
+        if (manifest == null) {
             return;
         }
 
-        // Clear and repopulate custom remaps
+        // Skip if we've already parsed this version
+        float currentVersion = manifest.getVersion();
+        if (currentVersion == lastParsedManifestVersion && !customNPCRemaps.isEmpty()) {
+            return;
+        }
+
+        Map<String, String> npcRenames = manifest.getNpcRenames();
+        if (npcRenames == null || npcRenames.isEmpty()) {
+            return;
+        }
+
+        // Version changed or first parse - rebuild the map
         customNPCRemaps.clear();
         customNPCRemaps.putAll(DEFAULT_NPC_RENAMES);
+        customNPCRemaps.putAll(npcRenames);
+        lastParsedManifestVersion = currentVersion;
 
-        // Add manifest renames
-        for (Map.Entry<String, String> entry : manifestManager.getManifest().getNpcRenames().entrySet()) {
-            String originalName = entry.getKey();
-            String newName = entry.getValue();
-            customNPCRemaps.put(originalName, newName);
-        }
+        log.debug("Parsed NPC renames from manifest v{}, {} entries", currentVersion, npcRenames.size());
     }
 
-    private void remapMenuEntryText(MenuEntry menuEntry, HashMap<String, String> map) {
+    private void remapMenuEntryText(MenuEntry menuEntry, Map<String, String> map) {
         String target = menuEntry.getTarget();
-        String cleanTarget;
-
         NPC npc = menuEntry.getNpc();
-        cleanTarget = npc != null ? Text.removeTags(npc.getName()) : Text.removeTags(target);
+        String cleanTarget = npc != null ? Text.removeTags(npc.getName()) : Text.removeTags(target);
 
-        String replacement = customNPCRemaps.get(cleanTarget);
+        String replacement = map.get(cleanTarget);
         if (replacement != null) {
             menuEntry.setTarget(target.replace(cleanTarget, replacement));
         }
