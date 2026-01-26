@@ -100,6 +100,7 @@ public class DataManager {
     private int[] oldVarps;
 
     private final HashMultimap<Integer, Integer> varpToVarbitMapping = HashMultimap.create();
+    private volatile boolean varpMappingReady = false;
 
     private final HashMap<Integer, Integer> varbData = new HashMap<>();
     private final HashMap<Integer, Integer> varpData = new HashMap<>();
@@ -910,14 +911,16 @@ public class DataManager {
         if (varpsToCheck.contains(varpIndexChanged)) {
             storeVarpChanged(varpIndexChanged, client.getVarpValue(varpIndexChanged));
         }
-        for (Integer i : varpToVarbitMapping.get(varpIndexChanged)) {
-            if (!varbitsToCheck.contains(i))
-                continue;
-            // For each varbit index, see if it changed.
-            int oldValue = client.getVarbitValue(oldVarps, i);
-            int newValue = client.getVarbitValue(i);
-            if (oldValue != newValue)
-                storeVarbitChanged(i, newValue);
+        if (varpMappingReady) {
+            for (Integer i : varpToVarbitMapping.get(varpIndexChanged)) {
+                if (!varbitsToCheck.contains(i))
+                    continue;
+                // For each varbit index, see if it changed.
+                int oldValue = client.getVarbitValue(oldVarps, i);
+                int newValue = client.getVarbitValue(i);
+                if (oldValue != newValue)
+                    storeVarbitChanged(i, newValue);
+            }
         }
         oldVarps[varpIndexChanged] = client.getVarpValue(varpIndexChanged);
     }
@@ -930,6 +933,7 @@ public class DataManager {
     private void setupVarpTracking() {
         final int VARBITS_ARCHIVE_ID = 14;
         // Init stuff to keep track of varb changes
+        varpMappingReady = false;
         varpToVarbitMapping.clear();
 
         if (oldVarps == null) {
@@ -951,6 +955,16 @@ public class DataManager {
                 VarbitComposition varbit = client.getVarbit(id);
                 if (varbit != null) {
                     varpToVarbitMapping.put(varbit.getIndex(), id);
+                }
+            }
+            varpMappingReady = true;
+            // Capture initial values for all tracked varbits
+            if (varbitsToCheck != null) {
+                for (Integer varbitId : varbitsToCheck) {
+                    int value = client.getVarbitValue(varbitId);
+                    if (value != 0) {
+                        storeVarbitChanged(varbitId, value);
+                    }
                 }
             }
             return true;
