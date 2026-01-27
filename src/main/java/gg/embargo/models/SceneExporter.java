@@ -245,18 +245,18 @@ public class SceneExporter {
             // For now, just use the tile colors - texture support can be added later
         }
 
-        // Triangle 1: SW, SE, NE
+        // Triangle 1: SW, NW, NE (CCW winding for front-face up)
         triangles.add(new TerrainTriangle(
                 swX, swY, swZ, swRgb,
-                seX, seY, seZ, seRgb,
+                nwX, nwY, nwZ, nwRgb,
                 neX, neY, neZ, neRgb
         ));
 
-        // Triangle 2: SW, NE, NW
+        // Triangle 2: SW, NE, SE (CCW winding for front-face up)
         triangles.add(new TerrainTriangle(
                 swX, swY, swZ, swRgb,
                 neX, neY, neZ, neRgb,
-                nwX, nwY, nwZ, nwRgb
+                seX, seY, seZ, seRgb
         ));
 
         return triangles;
