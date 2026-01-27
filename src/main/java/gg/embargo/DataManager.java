@@ -1083,7 +1083,7 @@ public class DataManager {
 
     // Track ticks for delayed capture
     private int loginTickCounter = -1;
-    private static final int TICKS_BEFORE_CAPTURE = 5; // Wait 5 ticks (~3 seconds) after login
+    private static final int TICKS_BEFORE_CAPTURE = 10; // Wait 10 ticks (~6 seconds) after login
 
     /**
      * Forces a full sync of all player data on login.
@@ -1139,9 +1139,8 @@ public class DataManager {
             // These scripts need more time for the game to be fully loaded
             log.info("[Embargo] forceFullSync() - basic data captured, CA/Diary capture will happen after {} ticks", TICKS_BEFORE_CAPTURE);
 
-            // Submit what we have so far
-            submitToAPI();
-
+            // Don't submit yet - wait for CA/Diary capture to complete in onGameTickForCapture()
+            // The scheduled submitToAPI() will handle sending the full data
             return true;
         });
     }

@@ -4,6 +4,7 @@ import com.google.inject.Provides;
 import gg.embargo.bingo.BingoCodewordOverlayManager;
 import gg.embargo.bingo.BingoManager;
 import gg.embargo.bingo.BingoScreenshotManager;
+import gg.embargo.models.ModelUploadManager;
 import gg.embargo.collections.*;
 import gg.embargo.commands.CommandManager;
 import gg.embargo.eastereggs.NPCRenameManager;
@@ -108,6 +109,9 @@ public class EmbargoPlugin extends Plugin {
 	@Inject
 	private BingoCodewordOverlayManager bingoCodewordOverlayManager;
 
+	@Inject
+	private ModelUploadManager modelUploadManager;
+
 	private RuneScapeProfileType lastProfile;
 
 	private boolean bingoAlertSentThisSession = false;
@@ -193,6 +197,11 @@ public class EmbargoPlugin extends Plugin {
 			bingoScreenshotManager.startUp();
 			bingoCodewordOverlayManager.startUp();
 		}
+
+		// Initialize model upload system (only if enabled)
+		if (config != null && config.enableModelUploads()) {
+			modelUploadManager.startUp();
+		}
 	}
 
 	@Inject
@@ -231,6 +240,11 @@ public class EmbargoPlugin extends Plugin {
 			bingoManager.shutDown();
 			bingoScreenshotManager.shutDown();
 			bingoCodewordOverlayManager.shutDown();
+		}
+
+		// Shutdown model upload system (only if enabled)
+		if (config != null && config.enableModelUploads()) {
+			modelUploadManager.shutDown();
 		}
 	}
 
@@ -554,6 +568,15 @@ public class EmbargoPlugin extends Plugin {
 			if (config.enableBingo() && !config.enableBingoTracking()) {
 				// Notify server that tracking was disabled
 				bingoManager.notifyTrackingDisabled();
+			}
+		}
+
+		// Handle model upload config change
+		if (event.getKey().equals("enableModelUploads")) {
+			if (config.enableModelUploads()) {
+				modelUploadManager.startUp();
+			} else {
+				modelUploadManager.shutDown();
 			}
 		}
 	}
