@@ -27,6 +27,9 @@ package gg.embargo;
 
 import com.google.common.collect.HashMultimap;
 import com.google.gson.*;
+import gg.embargo.collections.ClanData;
+import gg.embargo.collections.DropActivity;
+import gg.embargo.collections.PlayerAppearance;
 import gg.embargo.manifest.ManifestManager;
 import gg.embargo.ui.EmbargoPanel;
 import gg.embargo.untrackables.UntrackableItemManager;
@@ -35,7 +38,9 @@ import lombok.NonNull;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
+import net.runelite.api.clan.ClanChannel;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.kit.KitType;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.Subscribe;
@@ -53,6 +58,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -105,6 +111,40 @@ public class DataManager {
     private final HashMap<Integer, Integer> varbData = new HashMap<>();
     private final HashMap<Integer, Integer> varpData = new HashMap<>();
     private final HashMap<String, Integer> levelData = new HashMap<>();
+
+    // New data structures for additional tracking
+    private final HashMap<String, Long> xpData = new HashMap<>();
+    private final HashMap<String, Integer> combatAchievementData = new HashMap<>();
+    private final HashMap<String, Map<String, Integer>> achievementDiaryData = new HashMap<>();
+    private volatile ClanData clanData = null;
+    private volatile PlayerAppearance playerAppearance = null;
+    private final ConcurrentLinkedQueue<DropActivity> pendingDropActivities = new ConcurrentLinkedQueue<>();
+
+    // Combat Achievement tier IDs for script 4784 (1-6)
+    // Script 4784 returns the number of tasks completed for each tier
+    private static final int CA_SCRIPT_ID = 4784;
+    private static final String[] CA_TIER_NAMES = {"easy", "medium", "hard", "elite", "master", "grandmaster"};
+    // Tier IDs: Easy=1, Medium=2, Hard=3, Elite=4, Master=5, Grandmaster=6
+
+    // Achievement Diary names - order matches script 2200 IDs (0-11)
+    // Must match RuneProfile's AchievementDiary enum order
+    private static final String[] DIARY_NAMES = {
+        "Karamja",      // 0
+        "Ardougne",     // 1
+        "Falador",      // 2
+        "Fremennik",    // 3
+        "Kandarin",     // 4
+        "Desert",       // 5
+        "Lumbridge",    // 6
+        "Morytania",    // 7
+        "Varrock",      // 8
+        "Wilderness",   // 9
+        "Western",      // 10 (Western Provinces)
+        "Kourend"       // 11
+    };
+
+    // Valuable drop threshold (100k GP)
+    private static final long VALUABLE_DROP_THRESHOLD = 100000L;
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
@@ -638,12 +678,184 @@ public class DataManager {
         }
     }
 
+    public void storeSkillChanged(String skill, int skillLevel, long xp) {
+        synchronized (this) {
+            levelData.put(skill, skillLevel);
+            xpData.put(skill, xp);
+        }
+    }
+
     public void storeSkillChangedIfNotChanged(String skill, int skillLevel) {
         synchronized (this) {
             if (!levelData.containsKey(skill))
                 storeSkillChanged(skill, skillLevel);
         }
     }
+
+    public void storeSkillChangedIfNotChanged(String skill, int skillLevel, long xp) {
+        synchronized (this) {
+            if (!levelData.containsKey(skill))
+                storeSkillChanged(skill, skillLevel, xp);
+        }
+    }
+
+    // ========== New Capture Methods ==========
+
+    /**
+     * Captures combat achievement completion counts using script 4784.
+     * MUST be called from the client thread.
+     */
+    public void captureCombatAchievements() {
+        // Ensure game is fully loaded before running scripts
+        if (client.getGameState() != GameState.LOGGED_IN) {
+            log.info("[Embargo] captureCombatAchievements() skipped - game state is {}", client.getGameState());
+            return;
+        }
+
+        // Script 4784 with tier ID (1-6) returns completion count for that tier
+        int[] counts = new int[CA_TIER_NAMES.length];
+
+        for (int tierId = 1; tierId <= CA_TIER_NAMES.length; tierId++) {
+            try {
+                client.runScript(CA_SCRIPT_ID, tierId);
+                int[] stack = client.getIntStack();
+                counts[tierId - 1] = stack[0];
+                log.info("[Embargo] CA script 4784 tier {} returned stack[0]={}", tierId, stack[0]);
+            } catch (Exception e) {
+                log.warn("[Embargo] Failed to capture CA tier {}: {}", tierId, e.getMessage());
+                counts[tierId - 1] = 0;
+            }
+        }
+
+        synchronized (this) {
+            for (int i = 0; i < CA_TIER_NAMES.length; i++) {
+                combatAchievementData.put(CA_TIER_NAMES[i], counts[i]);
+            }
+        }
+
+        log.info("[Embargo] Captured Combat Achievements: easy={}, medium={}, hard={}, elite={}, master={}, grandmaster={}",
+            counts[0], counts[1], counts[2], counts[3], counts[4], counts[5]);
+    }
+
+    /**
+     * Captures achievement diary completion data using script 2200.
+     * MUST be called from the client thread.
+     */
+    public void captureAchievementDiaries() {
+        // Ensure game is fully loaded before running scripts
+        if (client.getGameState() != GameState.LOGGED_IN) {
+            log.info("[Embargo] captureAchievementDiaries() skipped - game state is {}", client.getGameState());
+            return;
+        }
+
+        log.info("[Embargo] captureAchievementDiaries() called - capturing {} diaries, game state: {}",
+            DIARY_NAMES.length, client.getGameState());
+
+        // Script 2200 returns diary completion counts at stack indices 0, 3, 6, 9
+        for (int diaryId = 0; diaryId < DIARY_NAMES.length; diaryId++) {
+            try {
+                client.runScript(2200, diaryId);
+                int[] stack = client.getIntStack();
+
+                // Log first 12 stack values to debug
+                if (diaryId == 0) {
+                    log.info("[Embargo] Script 2200 stack (first 12): [{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}]",
+                        stack[0], stack[1], stack[2], stack[3], stack[4], stack[5],
+                        stack[6], stack[7], stack[8], stack[9], stack[10], stack[11]);
+                }
+
+                Map<String, Integer> tiers = new HashMap<>();
+                tiers.put("easy", stack[0]);
+                tiers.put("medium", stack[3]);
+                tiers.put("hard", stack[6]);
+                tiers.put("elite", stack[9]);
+
+                synchronized (this) {
+                    achievementDiaryData.put(DIARY_NAMES[diaryId], tiers);
+                }
+                log.info("[Embargo] Diary {} (id={}): easy={}, medium={}, hard={}, elite={}",
+                    DIARY_NAMES[diaryId], diaryId, stack[0], stack[3], stack[6], stack[9]);
+            } catch (Exception e) {
+                log.warn("[Embargo] Failed to capture diary data for {}: {}", DIARY_NAMES[diaryId], e.getMessage());
+            }
+        }
+
+        synchronized (this) {
+            log.info("[Embargo] captureAchievementDiaries() complete - achievementDiaryData size: {}", achievementDiaryData.size());
+        }
+    }
+
+    public void captureClanData() {
+        ClanChannel clanChannel = client.getClanChannel();
+        if (clanChannel == null) {
+            clanData = null;
+            return;
+        }
+
+        clanData = ClanData.builder()
+            .clanName(clanChannel.getName())
+            .memberCount(clanChannel.getMembers().size())
+            .build();
+    }
+
+    public void capturePlayerAppearance() {
+        Player localPlayer = client.getLocalPlayer();
+        if (localPlayer == null) {
+            playerAppearance = null;
+            return;
+        }
+
+        PlayerComposition composition = localPlayer.getPlayerComposition();
+        if (composition == null) {
+            playerAppearance = null;
+            return;
+        }
+
+        // Get kit IDs by iterating over KitType values
+        KitType[] kitTypes = KitType.values();
+        int[] kitIds = new int[kitTypes.length];
+        for (int i = 0; i < kitTypes.length; i++) {
+            kitIds[i] = composition.getKitId(kitTypes[i]);
+        }
+
+        playerAppearance = PlayerAppearance.builder()
+            .equipmentIds(composition.getEquipmentIds() != null ? composition.getEquipmentIds().clone() : new int[0])
+            .kitIds(kitIds)
+            .colors(composition.getColors() != null ? composition.getColors().clone() : new int[0])
+            .isFemale(composition.isFemale())
+            .npcTransformId(composition.getTransformedNpcId())
+            .build();
+    }
+
+    public void trackValuableDrop(LootReceived event) {
+        for (ItemStack item : event.getItems()) {
+            long geValue = (long) itemManager.getItemPrice(item.getId()) * item.getQuantity();
+            if (geValue >= VALUABLE_DROP_THRESHOLD) {
+                DropActivity activity = DropActivity.builder()
+                    .itemName(itemManager.getItemComposition(item.getId()).getName())
+                    .itemId(item.getId())
+                    .quantity(item.getQuantity())
+                    .geValue(geValue)
+                    .source(event.getName())
+                    .sourceType(event.getType().name())
+                    .timestamp(Instant.now().toEpochMilli())
+                    .world(client.getWorld())
+                    .build();
+                pendingDropActivities.add(activity);
+            }
+        }
+    }
+
+    private List<DropActivity> drainDropQueue() {
+        List<DropActivity> batch = new ArrayList<>();
+        DropActivity activity;
+        while ((activity = pendingDropActivities.poll()) != null) {
+            batch.add(activity);
+        }
+        return batch;
+    }
+
+    // ========== End New Capture Methods ==========
 
     private <K, V> HashMap<K, V> clearChanges(HashMap<K, V> h) {
         HashMap<K, V> temp;
@@ -662,11 +874,19 @@ public class DataManager {
             varbData.clear();
             varpData.clear();
             levelData.clear();
+            xpData.clear();
+            combatAchievementData.clear();
+            achievementDiaryData.clear();
+            clanData = null;
+            playerAppearance = null;
+            pendingDropActivities.clear();
         }
     }
 
     private boolean hasDataToPush() {
-        return !(varbData.isEmpty() && varpData.isEmpty() && levelData.isEmpty());
+        return !(varbData.isEmpty() && varpData.isEmpty() && levelData.isEmpty()
+            && xpData.isEmpty() && combatAchievementData.isEmpty() && achievementDiaryData.isEmpty()
+            && clanData == null && playerAppearance == null && pendingDropActivities.isEmpty());
     }
 
     private JsonObject convertToJson() {
@@ -675,14 +895,39 @@ public class DataManager {
         // We need to synchronize this to handle the case where the RuneScapeProfileType
         // changes
         synchronized (this) {
+            log.info("[Embargo] convertToJson() called - CA data size: {}, Diary data size: {}",
+                combatAchievementData.size(), achievementDiaryData.size());
+
             RuneScapeProfileType r = RuneScapeProfileType.getCurrent(client);
             HashMap<Integer, Integer> tempVarbData = clearChanges(varbData);
             HashMap<Integer, Integer> tempVarpData = clearChanges(varpData);
             HashMap<String, Integer> tempLevelData = clearChanges(levelData);
+            HashMap<String, Long> tempXpData = clearChanges(xpData);
+            // CA and diary data don't change often - send cached values without clearing
+            // These are only updated on login or when specifically changed
+            HashMap<String, Integer> tempCaData = new HashMap<>(combatAchievementData);
+            HashMap<String, Map<String, Integer>> tempDiaryData = new HashMap<>(achievementDiaryData);
+            List<DropActivity> tempDrops = drainDropQueue();
+
+            log.info("[Embargo] convertToJson() - tempCaData size: {}, tempDiaryData size: {}",
+                tempCaData.size(), tempDiaryData.size());
 
             j.add("varb", gson.toJsonTree(tempVarbData));
             j.add("varp", gson.toJsonTree(tempVarpData));
             j.add("level", gson.toJsonTree(tempLevelData));
+            j.add("xp", gson.toJsonTree(tempXpData));
+            j.add("combatAchievements", gson.toJsonTree(tempCaData));
+            j.add("achievementDiaries", gson.toJsonTree(tempDiaryData));
+
+            if (clanData != null) {
+                j.add("clan", gson.toJsonTree(clanData));
+            }
+            if (playerAppearance != null) {
+                j.add("appearance", gson.toJsonTree(playerAppearance));
+            }
+            if (!tempDrops.isEmpty()) {
+                j.add("drops", gson.toJsonTree(tempDrops));
+            }
 
             parent.addProperty("username", client.getLocalPlayer().getName());
             parent.addProperty("profile", r.name());
@@ -710,6 +955,50 @@ public class DataManager {
             }
             for (String k : levelObj.keySet()) {
                 this.storeSkillChangedIfNotChanged(k, levelObj.get(k).getAsInt());
+            }
+
+            // Restore XP data
+            if (dataObj.has("xp")) {
+                JsonObject xpObj = dataObj.getAsJsonObject("xp");
+                for (String k : xpObj.keySet()) {
+                    if (!xpData.containsKey(k)) {
+                        xpData.put(k, xpObj.get(k).getAsLong());
+                    }
+                }
+            }
+
+            // Restore Combat Achievement data
+            if (dataObj.has("combatAchievements")) {
+                JsonObject caObj = dataObj.getAsJsonObject("combatAchievements");
+                for (String k : caObj.keySet()) {
+                    if (!combatAchievementData.containsKey(k)) {
+                        combatAchievementData.put(k, caObj.get(k).getAsInt());
+                    }
+                }
+            }
+
+            // Restore Achievement Diary data
+            if (dataObj.has("achievementDiaries")) {
+                JsonObject diaryObj = dataObj.getAsJsonObject("achievementDiaries");
+                for (String diaryName : diaryObj.keySet()) {
+                    if (!achievementDiaryData.containsKey(diaryName)) {
+                        JsonObject tiers = diaryObj.getAsJsonObject(diaryName);
+                        Map<String, Integer> tierMap = new HashMap<>();
+                        for (String tier : tiers.keySet()) {
+                            tierMap.put(tier, tiers.get(tier).getAsInt());
+                        }
+                        achievementDiaryData.put(diaryName, tierMap);
+                    }
+                }
+            }
+
+            // Restore drops (add back to queue)
+            if (dataObj.has("drops")) {
+                JsonArray dropsArr = dataObj.getAsJsonArray("drops");
+                for (JsonElement elem : dropsArr) {
+                    DropActivity drop = gson.fromJson(elem, DropActivity.class);
+                    pendingDropActivities.add(drop);
+                }
             }
         }
     }
@@ -779,8 +1068,102 @@ public class DataManager {
         for (int varpIndex : varpsToCheck) {
             storeVarpChanged(varpIndex, client.getVarpValue(varpIndex));
         }
+
+        // Capture skills with both level and XP
         for (Skill s : Skill.values()) {
-            storeSkillChanged(s.getName(), client.getRealSkillLevel(s));
+            storeSkillChanged(s.getName(), client.getRealSkillLevel(s), client.getSkillExperience(s));
+        }
+
+        // Capture new data types
+        captureCombatAchievements();
+        captureAchievementDiaries();
+        captureClanData();
+        capturePlayerAppearance();
+    }
+
+    // Track ticks for delayed capture
+    private int loginTickCounter = -1;
+    private static final int TICKS_BEFORE_CAPTURE = 5; // Wait 5 ticks (~3 seconds) after login
+
+    /**
+     * Forces a full sync of all player data on login.
+     * Captures all data types and immediately submits to the API.
+     */
+    public void forceFullSync() {
+        log.info("[Embargo] forceFullSync() called");
+        // Reset tick counter to trigger delayed capture
+        loginTickCounter = 0;
+
+        clientThread.invokeLater(() -> {
+            if (client == null || client.getLocalPlayer() == null) {
+                log.info("[Embargo] forceFullSync() - client or localPlayer is null, retrying...");
+                return false;
+            }
+
+            if (client.getGameState() != GameState.LOGGED_IN) {
+                log.info("[Embargo] forceFullSync() - game state is {}, retrying...", client.getGameState());
+                return false;
+            }
+
+            log.info("[Embargo] forceFullSync() - Starting full data sync on login (tick counter: {})", loginTickCounter);
+
+            // Ensure we have the latest manifest
+            if (varbitsToCheck == null || varpsToCheck == null) {
+                manifestManager.getLatestManifest();
+            }
+
+            // Capture all varbit data
+            if (varbitsToCheck != null) {
+                for (int varbIndex : varbitsToCheck) {
+                    storeVarbitChanged(varbIndex, client.getVarbitValue(varbIndex));
+                }
+            }
+
+            // Capture all varp data
+            if (varpsToCheck != null) {
+                for (int varpIndex : varpsToCheck) {
+                    storeVarpChanged(varpIndex, client.getVarpValue(varpIndex));
+                }
+            }
+
+            // Capture skills with both level and XP
+            for (Skill s : Skill.values()) {
+                storeSkillChanged(s.getName(), client.getRealSkillLevel(s), client.getSkillExperience(s));
+            }
+
+            // Capture clan and appearance immediately (don't need scripts)
+            captureClanData();
+            capturePlayerAppearance();
+
+            // Don't capture CA/Diary data here - let the delayed capture handle it
+            // These scripts need more time for the game to be fully loaded
+            log.info("[Embargo] forceFullSync() - basic data captured, CA/Diary capture will happen after {} ticks", TICKS_BEFORE_CAPTURE);
+
+            // Submit what we have so far
+            submitToAPI();
+
+            return true;
+        });
+    }
+
+    /**
+     * Called on each game tick to handle delayed data capture.
+     * Should be called from a GameTick subscriber.
+     */
+    public void onGameTickForCapture() {
+        if (loginTickCounter >= 0) {
+            loginTickCounter++;
+            if (loginTickCounter >= TICKS_BEFORE_CAPTURE) {
+                log.info("[Embargo] Delayed capture triggered after {} ticks", loginTickCounter);
+                loginTickCounter = -1; // Reset to prevent repeated captures
+
+                // Now capture CA and Diary data
+                captureCombatAchievements();
+                captureAchievementDiaries();
+
+                // Submit the newly captured data
+                submitToAPI();
+            }
         }
     }
 

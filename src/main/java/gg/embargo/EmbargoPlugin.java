@@ -17,6 +17,7 @@ import gg.embargo.untrackables.UntrackableItemManager;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.events.*;
+import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.RuneScapeProfileType;
@@ -247,6 +248,12 @@ public class EmbargoPlugin extends Plugin {
 		}
 	}
 
+	@Subscribe
+	public void onGameTick(GameTick gameTick) {
+		// Handle delayed data capture for CA/Diary data
+		dataManager.onGameTickForCapture();
+	}
+
 	private void handleLoggedIn() {
 		clientThread.invokeLater(() -> {
 			if (client == null || dataManager.stopTryingForAccount.get()) {
@@ -255,6 +262,9 @@ public class EmbargoPlugin extends Plugin {
 
 			if (isUsernameRegistered.get()) {
 				embargoPanel.updateLoggedIn(true);
+
+				// Force sync all data on login
+				dataManager.forceFullSync();
 
 				// Send bingo alert on login
 				sendBingoLoginAlert();
@@ -270,6 +280,9 @@ public class EmbargoPlugin extends Plugin {
 					if (isRegistered) {
 						embargoPanel.updateLoggedIn(true);
 						isUsernameRegistered.set(true);
+
+						// Force sync all data on login
+						dataManager.forceFullSync();
 
 						// Send bingo alert on login
 						sendBingoLoginAlert();
@@ -464,11 +477,12 @@ public class EmbargoPlugin extends Plugin {
 
 		String skillName = skill.getName();
 		int newLevel = statChanged.getLevel();
+		long newXp = client.getSkillExperience(skill);
 		Integer cachedLevel = skillLevelCache.get(skillName);
 
 		if (cachedLevel == null || cachedLevel != newLevel) {
 			skillLevelCache.put(skillName, newLevel);
-			dataManager.storeSkillChanged(skillName, newLevel);
+			dataManager.storeSkillChanged(skillName, newLevel, newXp);
 		}
 	}
 
@@ -478,6 +492,9 @@ public class EmbargoPlugin extends Plugin {
 		if (eventType != LootRecordType.NPC && eventType != LootRecordType.EVENT) {
 			return;
 		}
+
+		// Track valuable drops as activities
+		dataManager.trackValuableDrop(event);
 
 		String npcName = event.getName();
 		if (dataManager.shouldTrackLoot(npcName)) {
