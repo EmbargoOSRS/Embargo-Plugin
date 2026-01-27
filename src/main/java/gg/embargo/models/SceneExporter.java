@@ -9,13 +9,14 @@ import java.util.List;
 
 /**
  * Exports the surrounding scene around the player as a combined PLY model.
- * Includes terrain, game objects, wall objects, ground objects, and decorative objects.
+ * Includes terrain with heights, game objects, wall objects, ground objects, and decorative objects.
  */
 @Slf4j
 public class SceneExporter {
 
     private static final int TILE_RADIUS = 5; // 11x11 tiles around player
     private static final int LOCAL_TILE_SIZE = 128; // RuneLite tile size in local units
+    private static final int DEFAULT_GROUND_COLOR = 0x4B3C2A; // Default brown for missing colors
 
     /**
      * Extracts the scene around the player as a combined ModelData.
@@ -42,6 +43,9 @@ public class SceneExporter {
             return null;
         }
 
+        // Get tile heights for terrain elevation
+        int[][][] tileHeights = scene.getTileHeights();
+
         // Get player's scene position
         LocalPoint playerLocal = player.getLocalLocation();
         int playerSceneX = playerLocal.getSceneX();
@@ -52,12 +56,19 @@ public class SceneExporter {
         int playerLocalX = playerLocal.getX();
         int playerLocalY = playerLocal.getY();
 
-        log.info("[SceneExport] Player at scene ({}, {}), plane {}", playerSceneX, playerSceneY, playerPlane);
+        // Get player's height for reference
+        int playerHeight = (tileHeights != null && playerPlane < tileHeights.length
+                && playerSceneX < tileHeights[playerPlane].length
+                && playerSceneY < tileHeights[playerPlane][playerSceneX].length)
+                ? tileHeights[playerPlane][playerSceneX][playerSceneY] : 0;
+
+        log.info("[SceneExport] Player at scene ({}, {}), plane {}, height {}",
+                playerSceneX, playerSceneY, playerPlane, playerHeight);
         log.info("[SceneExport] Player local coords: ({}, {})", playerLocalX, playerLocalY);
         log.info("[SceneExport] Scene size: {}, searching radius: {}", Constants.SCENE_SIZE, TILE_RADIUS);
 
         List<ExtractedModel> extractedModels = new ArrayList<>();
-        List<TerrainTile> terrainTiles = new ArrayList<>();
+        List<TerrainTriangle> terrainTriangles = new ArrayList<>();
 
         int tilesChecked = 0;
         int tilesWithObjects = 0;
@@ -85,30 +96,29 @@ public class SceneExporter {
                     continue;
                 }
 
-                // Calculate tile position relative to player
-                int tileBaseX = sceneX * LOCAL_TILE_SIZE;
-                int tileBaseY = sceneY * LOCAL_TILE_SIZE;
-
                 boolean hasObjects = false;
                 boolean hasTerrain = false;
 
-                // Extract terrain (SceneTilePaint for simple tiles)
-                SceneTilePaint paint = tile.getSceneTilePaint();
-                if (paint != null) {
-                    TerrainTile terrain = extractTilePaint(paint, tileBaseX, tileBaseY, playerLocalX, playerLocalY);
-                    if (terrain != null) {
-                        terrainTiles.add(terrain);
-                        hasTerrain = true;
-                    }
-                }
-
-                // Extract terrain (SceneTileModel for complex tiles)
+                // Extract terrain - prefer SceneTileModel over SceneTilePaint
                 SceneTileModel tileModel = tile.getSceneTileModel();
                 if (tileModel != null) {
-                    List<TerrainTile> modelTerrain = extractTileModel(tileModel, tileBaseX, tileBaseY, playerLocalX, playerLocalY);
+                    List<TerrainTriangle> modelTerrain = extractTileModel(
+                            tileModel, sceneX, sceneY, playerLocalX, playerLocalY, playerHeight);
                     if (!modelTerrain.isEmpty()) {
-                        terrainTiles.addAll(modelTerrain);
+                        terrainTriangles.addAll(modelTerrain);
                         hasTerrain = true;
+                    }
+                } else {
+                    // Fall back to SceneTilePaint for simple tiles
+                    SceneTilePaint paint = tile.getSceneTilePaint();
+                    if (paint != null) {
+                        List<TerrainTriangle> paintTerrain = extractTilePaint(
+                                paint, sceneX, sceneY, tileHeights, playerPlane,
+                                playerLocalX, playerLocalY, playerHeight);
+                        if (!paintTerrain.isEmpty()) {
+                            terrainTriangles.addAll(paintTerrain);
+                            hasTerrain = true;
+                        }
                     }
                 }
 
@@ -161,45 +171,103 @@ public class SceneExporter {
                 tilesChecked, tilesWithObjects, tilesWithTerrain);
         log.info("[SceneExport] Found objects - GameObjects: {}, WallObjects: {}, GroundObjects: {}, DecorativeObjects: {}",
                 totalGameObjects, totalWallObjects, totalGroundObjects, totalDecorativeObjects);
-        log.info("[SceneExport] Extracted {} object models, {} terrain tiles", extractedModels.size(), terrainTiles.size());
+        log.info("[SceneExport] Extracted {} object models, {} terrain triangles",
+                extractedModels.size(), terrainTriangles.size());
 
         // Combine terrain and objects
-        if (extractedModels.isEmpty() && terrainTiles.isEmpty()) {
+        if (extractedModels.isEmpty() && terrainTriangles.isEmpty()) {
             log.warn("[SceneExport] No models or terrain extracted");
             return null;
         }
 
-        return combineAllData(client, extractedModels, terrainTiles);
+        return combineAllData(client, extractedModels, terrainTriangles);
     }
 
     /**
-     * Extracts terrain from a SceneTilePaint (simple flat tile).
+     * Extracts terrain from a SceneTilePaint (simple tile) with proper heights.
      */
-    private static TerrainTile extractTilePaint(SceneTilePaint paint, int tileBaseX, int tileBaseY,
-                                                 int playerLocalX, int playerLocalY) {
+    private static List<TerrainTriangle> extractTilePaint(SceneTilePaint paint, int sceneX, int sceneY,
+                                                           int[][][] tileHeights, int plane,
+                                                           int playerLocalX, int playerLocalY, int playerHeight) {
+        List<TerrainTriangle> triangles = new ArrayList<>();
+
         int swColor = paint.getSwColor();
         int seColor = paint.getSeColor();
         int nwColor = paint.getNwColor();
         int neColor = paint.getNeColor();
 
-        // Skip if all colors are 0 (invisible/water)
-        if (swColor == 0 && seColor == 0 && nwColor == 0 && neColor == 0) {
-            return null;
+        // Check if this is a textured tile
+        int texture = paint.getTexture();
+
+        // Get heights at each corner
+        int swHeight = getHeight(tileHeights, plane, sceneX, sceneY) - playerHeight;
+        int seHeight = getHeight(tileHeights, plane, sceneX + 1, sceneY) - playerHeight;
+        int nwHeight = getHeight(tileHeights, plane, sceneX, sceneY + 1) - playerHeight;
+        int neHeight = getHeight(tileHeights, plane, sceneX + 1, sceneY + 1) - playerHeight;
+
+        // Calculate positions relative to player
+        int baseX = sceneX * LOCAL_TILE_SIZE - playerLocalX;
+        int baseY = sceneY * LOCAL_TILE_SIZE - playerLocalY;
+
+        // SW corner
+        int swX = baseX;
+        int swZ = baseY;
+        int swY = -swHeight; // Negate for coordinate system
+
+        // SE corner
+        int seX = baseX + LOCAL_TILE_SIZE;
+        int seZ = baseY;
+        int seY = -seHeight;
+
+        // NW corner
+        int nwX = baseX;
+        int nwZ = baseY + LOCAL_TILE_SIZE;
+        int nwY = -nwHeight;
+
+        // NE corner
+        int neX = baseX + LOCAL_TILE_SIZE;
+        int neZ = baseY + LOCAL_TILE_SIZE;
+        int neY = -neHeight;
+
+        // Convert colors - use default if 0
+        int swRgb = (swColor != 0) ? JagexColor.HSLtoRGB((short) swColor) : DEFAULT_GROUND_COLOR;
+        int seRgb = (seColor != 0) ? JagexColor.HSLtoRGB((short) seColor) : DEFAULT_GROUND_COLOR;
+        int nwRgb = (nwColor != 0) ? JagexColor.HSLtoRGB((short) nwColor) : DEFAULT_GROUND_COLOR;
+        int neRgb = (neColor != 0) ? JagexColor.HSLtoRGB((short) neColor) : DEFAULT_GROUND_COLOR;
+
+        // Skip only if completely invisible (all colors 0 AND no texture)
+        if (swColor == 0 && seColor == 0 && nwColor == 0 && neColor == 0 && texture == -1) {
+            return triangles;
         }
 
-        int offsetX = tileBaseX - playerLocalX;
-        int offsetY = tileBaseY - playerLocalY;
+        // If textured, try to get texture color
+        if (texture != -1) {
+            // For now, just use the tile colors - texture support can be added later
+        }
 
-        return new TerrainTile(offsetX, offsetY, 0, LOCAL_TILE_SIZE,
-                swColor, seColor, nwColor, neColor);
+        // Triangle 1: SW, SE, NE
+        triangles.add(new TerrainTriangle(
+                swX, swY, swZ, swRgb,
+                seX, seY, seZ, seRgb,
+                neX, neY, neZ, neRgb
+        ));
+
+        // Triangle 2: SW, NE, NW
+        triangles.add(new TerrainTriangle(
+                swX, swY, swZ, swRgb,
+                neX, neY, neZ, neRgb,
+                nwX, nwY, nwZ, nwRgb
+        ));
+
+        return triangles;
     }
 
     /**
      * Extracts terrain from a SceneTileModel (complex terrain with height variation).
      */
-    private static List<TerrainTile> extractTileModel(SceneTileModel model, int tileBaseX, int tileBaseY,
-                                                       int playerLocalX, int playerLocalY) {
-        List<TerrainTile> tiles = new ArrayList<>();
+    private static List<TerrainTriangle> extractTileModel(SceneTileModel model, int sceneX, int sceneY,
+                                                           int playerLocalX, int playerLocalY, int playerHeight) {
+        List<TerrainTriangle> triangles = new ArrayList<>();
 
         int[] faceX = model.getFaceX();
         int[] faceY = model.getFaceY();
@@ -207,14 +275,17 @@ public class SceneExporter {
         int[] vertexX = model.getVertexX();
         int[] vertexY = model.getVertexY();
         int[] vertexZ = model.getVertexZ();
-        int[] faceColors = model.getTriangleColorA();
+        int[] colorA = model.getTriangleColorA();
+        int[] colorB = model.getTriangleColorB();
+        int[] colorC = model.getTriangleColorC();
 
-        if (faceX == null || vertexX == null || faceColors == null) {
-            return tiles;
+        if (faceX == null || vertexX == null) {
+            return triangles;
         }
 
-        int offsetX = tileBaseX - playerLocalX;
-        int offsetY = tileBaseY - playerLocalY;
+        // Calculate base offset
+        int baseX = sceneX * LOCAL_TILE_SIZE - playerLocalX;
+        int baseZ = sceneY * LOCAL_TILE_SIZE - playerLocalY;
 
         for (int i = 0; i < faceX.length; i++) {
             int v1 = faceX[i];
@@ -225,19 +296,56 @@ public class SceneExporter {
                 continue;
             }
 
-            int color = (i < faceColors.length) ? faceColors[i] : 0;
-            if (color == 0) continue;
+            // Get colors for each vertex
+            int c1 = (colorA != null && i < colorA.length) ? colorA[i] : 0;
+            int c2 = (colorB != null && i < colorB.length) ? colorB[i] : 0;
+            int c3 = (colorC != null && i < colorC.length) ? colorC[i] : 0;
 
-            TerrainTile tile = new TerrainTile(
-                    offsetX + vertexX[v1], offsetY + vertexZ[v1], -vertexY[v1],
-                    offsetX + vertexX[v2], offsetY + vertexZ[v2], -vertexY[v2],
-                    offsetX + vertexX[v3], offsetY + vertexZ[v3], -vertexY[v3],
-                    color
-            );
-            tiles.add(tile);
+            // Convert to RGB
+            int rgb1 = (c1 != 0) ? JagexColor.HSLtoRGB((short) c1) : DEFAULT_GROUND_COLOR;
+            int rgb2 = (c2 != 0) ? JagexColor.HSLtoRGB((short) c2) : DEFAULT_GROUND_COLOR;
+            int rgb3 = (c3 != 0) ? JagexColor.HSLtoRGB((short) c3) : DEFAULT_GROUND_COLOR;
+
+            // Skip if all colors are 0
+            if (c1 == 0 && c2 == 0 && c3 == 0) {
+                continue;
+            }
+
+            // Vertex positions - note the coordinate transforms:
+            // vertexX is local X offset within tile
+            // vertexZ is local Z offset within tile (RuneLite's Y on ground plane)
+            // vertexY is height (negative in RuneLite = up)
+            int x1 = baseX + vertexX[v1];
+            int y1 = -(vertexY[v1] + playerHeight);
+            int z1 = baseZ + vertexZ[v1];
+
+            int x2 = baseX + vertexX[v2];
+            int y2 = -(vertexY[v2] + playerHeight);
+            int z2 = baseZ + vertexZ[v2];
+
+            int x3 = baseX + vertexX[v3];
+            int y3 = -(vertexY[v3] + playerHeight);
+            int z3 = baseZ + vertexZ[v3];
+
+            triangles.add(new TerrainTriangle(
+                    x1, y1, z1, rgb1,
+                    x2, y2, z2, rgb2,
+                    x3, y3, z3, rgb3
+            ));
         }
 
-        return tiles;
+        return triangles;
+    }
+
+    /**
+     * Gets tile height with bounds checking.
+     */
+    private static int getHeight(int[][][] tileHeights, int plane, int x, int y) {
+        if (tileHeights == null) return 0;
+        if (plane < 0 || plane >= tileHeights.length) return 0;
+        if (x < 0 || x >= tileHeights[plane].length) return 0;
+        if (y < 0 || y >= tileHeights[plane][x].length) return 0;
+        return tileHeights[plane][x][y];
     }
 
     private static void extractGameObject(Client client, GameObject obj, int playerLocalX, int playerLocalY,
@@ -258,8 +366,6 @@ public class SceneExporter {
         int offsetX = loc.getX() - playerLocalX;
         int offsetY = loc.getY() - playerLocalY;
 
-        log.debug("[SceneExport] Extracted GameObject ID {} at offset ({}, {}), faces={}",
-                obj.getId(), offsetX, offsetY, model.getFaceCount());
         models.add(new ExtractedModel(model, offsetX, offsetY, 0));
     }
 
@@ -327,18 +433,14 @@ public class SceneExporter {
      * Combines all extracted data into a single ModelData.
      */
     private static ModelData combineAllData(Client client, List<ExtractedModel> objectModels,
-                                            List<TerrainTile> terrainTiles) {
+                                            List<TerrainTriangle> terrainTriangles) {
         // Count faces
         int objectFaces = 0;
         for (ExtractedModel em : objectModels) {
             objectFaces += em.model.getFaceCount();
         }
 
-        int terrainFaces = 0;
-        for (TerrainTile t : terrainTiles) {
-            terrainFaces += t.isTriangle ? 1 : 2; // Quads become 2 triangles
-        }
-
+        int terrainFaces = terrainTriangles.size();
         int totalFaces = objectFaces + terrainFaces;
         int totalVertices = totalFaces * 3;
 
@@ -420,17 +522,17 @@ public class SceneExporter {
                     color3 = JagexColor.HSLtoRGB(hsl3);
                 }
 
-                colorsR[outIdx1] = (byte) JagexColor.getRed(color1);
-                colorsG[outIdx1] = (byte) JagexColor.getGreen(color1);
-                colorsB[outIdx1] = (byte) JagexColor.getBlue(color1);
+                colorsR[outIdx1] = (byte) ((color1 >> 16) & 0xFF);
+                colorsG[outIdx1] = (byte) ((color1 >> 8) & 0xFF);
+                colorsB[outIdx1] = (byte) (color1 & 0xFF);
 
-                colorsR[outIdx2] = (byte) JagexColor.getRed(color2);
-                colorsG[outIdx2] = (byte) JagexColor.getGreen(color2);
-                colorsB[outIdx2] = (byte) JagexColor.getBlue(color2);
+                colorsR[outIdx2] = (byte) ((color2 >> 16) & 0xFF);
+                colorsG[outIdx2] = (byte) ((color2 >> 8) & 0xFF);
+                colorsB[outIdx2] = (byte) (color2 & 0xFF);
 
-                colorsR[outIdx3] = (byte) JagexColor.getRed(color3);
-                colorsG[outIdx3] = (byte) JagexColor.getGreen(color3);
-                colorsB[outIdx3] = (byte) JagexColor.getBlue(color3);
+                colorsR[outIdx3] = (byte) ((color3 >> 16) & 0xFF);
+                colorsG[outIdx3] = (byte) ((color3 >> 8) & 0xFF);
+                colorsB[outIdx3] = (byte) (color3 & 0xFF);
 
                 faceIndices1[faceOffset + face] = outIdx1;
                 faceIndices2[faceOffset + face] = outIdx2;
@@ -441,124 +543,42 @@ public class SceneExporter {
             faceOffset += faceCount;
         }
 
-        // Add terrain tiles
-        for (TerrainTile t : terrainTiles) {
-            if (t.isTriangle) {
-                // Single triangle
-                int outIdx1 = vertexOffset;
-                int outIdx2 = vertexOffset + 1;
-                int outIdx3 = vertexOffset + 2;
+        // Add terrain triangles
+        for (TerrainTriangle t : terrainTriangles) {
+            int outIdx1 = vertexOffset;
+            int outIdx2 = vertexOffset + 1;
+            int outIdx3 = vertexOffset + 2;
 
-                verticesX[outIdx1] = clampToShort(t.x1);
-                verticesY[outIdx1] = clampToShort(t.y1);
-                verticesZ[outIdx1] = clampToShort(t.z1);
+            verticesX[outIdx1] = clampToShort(t.x1);
+            verticesY[outIdx1] = clampToShort(t.y1);
+            verticesZ[outIdx1] = clampToShort(t.z1);
 
-                verticesX[outIdx2] = clampToShort(t.x2);
-                verticesY[outIdx2] = clampToShort(t.y2);
-                verticesZ[outIdx2] = clampToShort(t.z2);
+            verticesX[outIdx2] = clampToShort(t.x2);
+            verticesY[outIdx2] = clampToShort(t.y2);
+            verticesZ[outIdx2] = clampToShort(t.z2);
 
-                verticesX[outIdx3] = clampToShort(t.x3);
-                verticesY[outIdx3] = clampToShort(t.y3);
-                verticesZ[outIdx3] = clampToShort(t.z3);
+            verticesX[outIdx3] = clampToShort(t.x3);
+            verticesY[outIdx3] = clampToShort(t.y3);
+            verticesZ[outIdx3] = clampToShort(t.z3);
 
-                int rgb = JagexColor.HSLtoRGB((short) t.color);
-                byte r = (byte) JagexColor.getRed(rgb);
-                byte g = (byte) JagexColor.getGreen(rgb);
-                byte b = (byte) JagexColor.getBlue(rgb);
+            colorsR[outIdx1] = (byte) ((t.color1 >> 16) & 0xFF);
+            colorsG[outIdx1] = (byte) ((t.color1 >> 8) & 0xFF);
+            colorsB[outIdx1] = (byte) (t.color1 & 0xFF);
 
-                colorsR[outIdx1] = colorsR[outIdx2] = colorsR[outIdx3] = r;
-                colorsG[outIdx1] = colorsG[outIdx2] = colorsG[outIdx3] = g;
-                colorsB[outIdx1] = colorsB[outIdx2] = colorsB[outIdx3] = b;
+            colorsR[outIdx2] = (byte) ((t.color2 >> 16) & 0xFF);
+            colorsG[outIdx2] = (byte) ((t.color2 >> 8) & 0xFF);
+            colorsB[outIdx2] = (byte) (t.color2 & 0xFF);
 
-                faceIndices1[faceOffset] = outIdx1;
-                faceIndices2[faceOffset] = outIdx2;
-                faceIndices3[faceOffset] = outIdx3;
+            colorsR[outIdx3] = (byte) ((t.color3 >> 16) & 0xFF);
+            colorsG[outIdx3] = (byte) ((t.color3 >> 8) & 0xFF);
+            colorsB[outIdx3] = (byte) (t.color3 & 0xFF);
 
-                vertexOffset += 3;
-                faceOffset += 1;
-            } else {
-                // Quad - two triangles
-                // Triangle 1: SW, SE, NE
-                int outIdx1 = vertexOffset;
-                int outIdx2 = vertexOffset + 1;
-                int outIdx3 = vertexOffset + 2;
+            faceIndices1[faceOffset] = outIdx1;
+            faceIndices2[faceOffset] = outIdx2;
+            faceIndices3[faceOffset] = outIdx3;
 
-                // SW corner
-                verticesX[outIdx1] = clampToShort(t.offsetX);
-                verticesY[outIdx1] = 0;
-                verticesZ[outIdx1] = clampToShort(t.offsetY);
-
-                // SE corner
-                verticesX[outIdx2] = clampToShort(t.offsetX + t.size);
-                verticesY[outIdx2] = 0;
-                verticesZ[outIdx2] = clampToShort(t.offsetY);
-
-                // NE corner
-                verticesX[outIdx3] = clampToShort(t.offsetX + t.size);
-                verticesY[outIdx3] = 0;
-                verticesZ[outIdx3] = clampToShort(t.offsetY + t.size);
-
-                int rgb1 = JagexColor.HSLtoRGB((short) t.swColor);
-                int rgb2 = JagexColor.HSLtoRGB((short) t.seColor);
-                int rgb3 = JagexColor.HSLtoRGB((short) t.neColor);
-
-                colorsR[outIdx1] = (byte) JagexColor.getRed(rgb1);
-                colorsG[outIdx1] = (byte) JagexColor.getGreen(rgb1);
-                colorsB[outIdx1] = (byte) JagexColor.getBlue(rgb1);
-
-                colorsR[outIdx2] = (byte) JagexColor.getRed(rgb2);
-                colorsG[outIdx2] = (byte) JagexColor.getGreen(rgb2);
-                colorsB[outIdx2] = (byte) JagexColor.getBlue(rgb2);
-
-                colorsR[outIdx3] = (byte) JagexColor.getRed(rgb3);
-                colorsG[outIdx3] = (byte) JagexColor.getGreen(rgb3);
-                colorsB[outIdx3] = (byte) JagexColor.getBlue(rgb3);
-
-                faceIndices1[faceOffset] = outIdx1;
-                faceIndices2[faceOffset] = outIdx2;
-                faceIndices3[faceOffset] = outIdx3;
-
-                // Triangle 2: SW, NE, NW
-                int outIdx4 = vertexOffset + 3;
-                int outIdx5 = vertexOffset + 4;
-                int outIdx6 = vertexOffset + 5;
-
-                // SW corner
-                verticesX[outIdx4] = clampToShort(t.offsetX);
-                verticesY[outIdx4] = 0;
-                verticesZ[outIdx4] = clampToShort(t.offsetY);
-
-                // NE corner
-                verticesX[outIdx5] = clampToShort(t.offsetX + t.size);
-                verticesY[outIdx5] = 0;
-                verticesZ[outIdx5] = clampToShort(t.offsetY + t.size);
-
-                // NW corner
-                verticesX[outIdx6] = clampToShort(t.offsetX);
-                verticesY[outIdx6] = 0;
-                verticesZ[outIdx6] = clampToShort(t.offsetY + t.size);
-
-                int rgb4 = JagexColor.HSLtoRGB((short) t.nwColor);
-
-                colorsR[outIdx4] = (byte) JagexColor.getRed(rgb1);
-                colorsG[outIdx4] = (byte) JagexColor.getGreen(rgb1);
-                colorsB[outIdx4] = (byte) JagexColor.getBlue(rgb1);
-
-                colorsR[outIdx5] = (byte) JagexColor.getRed(rgb3);
-                colorsG[outIdx5] = (byte) JagexColor.getGreen(rgb3);
-                colorsB[outIdx5] = (byte) JagexColor.getBlue(rgb3);
-
-                colorsR[outIdx6] = (byte) JagexColor.getRed(rgb4);
-                colorsG[outIdx6] = (byte) JagexColor.getGreen(rgb4);
-                colorsB[outIdx6] = (byte) JagexColor.getBlue(rgb4);
-
-                faceIndices1[faceOffset + 1] = outIdx4;
-                faceIndices2[faceOffset + 1] = outIdx5;
-                faceIndices3[faceOffset + 1] = outIdx6;
-
-                vertexOffset += 6;
-                faceOffset += 2;
-            }
+            vertexOffset += 3;
+            faceOffset += 1;
         }
 
         return ModelData.builder()
@@ -614,45 +634,19 @@ public class SceneExporter {
     }
 
     /**
-     * Helper class to hold terrain tile data.
+     * Helper class to hold a terrain triangle with per-vertex positions and colors.
      */
-    private static class TerrainTile {
-        final boolean isTriangle;
-        // For quad tiles (from SceneTilePaint)
-        final int offsetX, offsetY, size;
-        final int swColor, seColor, nwColor, neColor;
-        // For triangle tiles (from SceneTileModel)
-        final int x1, y1, z1, x2, y2, z2, x3, y3, z3;
-        final int color;
+    private static class TerrainTriangle {
+        final int x1, y1, z1, color1;
+        final int x2, y2, z2, color2;
+        final int x3, y3, z3, color3;
 
-        // Quad constructor
-        TerrainTile(int offsetX, int offsetY, int offsetZ, int size,
-                    int swColor, int seColor, int nwColor, int neColor) {
-            this.isTriangle = false;
-            this.offsetX = offsetX;
-            this.offsetY = offsetY;
-            this.size = size;
-            this.swColor = swColor;
-            this.seColor = seColor;
-            this.nwColor = nwColor;
-            this.neColor = neColor;
-            // Unused for quads
-            this.x1 = this.y1 = this.z1 = 0;
-            this.x2 = this.y2 = this.z2 = 0;
-            this.x3 = this.y3 = this.z3 = 0;
-            this.color = 0;
-        }
-
-        // Triangle constructor
-        TerrainTile(int x1, int z1, int y1, int x2, int z2, int y2, int x3, int z3, int y3, int color) {
-            this.isTriangle = true;
-            this.x1 = x1; this.y1 = y1; this.z1 = z1;
-            this.x2 = x2; this.y2 = y2; this.z2 = z2;
-            this.x3 = x3; this.y3 = y3; this.z3 = z3;
-            this.color = color;
-            // Unused for triangles
-            this.offsetX = this.offsetY = this.size = 0;
-            this.swColor = this.seColor = this.nwColor = this.neColor = 0;
+        TerrainTriangle(int x1, int y1, int z1, int color1,
+                        int x2, int y2, int z2, int color2,
+                        int x3, int y3, int z3, int color3) {
+            this.x1 = x1; this.y1 = y1; this.z1 = z1; this.color1 = color1;
+            this.x2 = x2; this.y2 = y2; this.z2 = z2; this.color2 = color2;
+            this.x3 = x3; this.y3 = y3; this.z3 = z3; this.color3 = color3;
         }
     }
 }
