@@ -256,5 +256,16 @@ public interface EmbargoConfig extends Config
         return true;
     }
 
+    @ConfigItem(
+            keyName = "includeScene",
+            name = "Include Surrounding Scene",
+            description = "Also upload the 3x3 tile area around your character (objects, walls, decorations)",
+            position = 2,
+            section = modelUploadSettings
+    )
+    default boolean includeScene() {
+        return false;
+    }
+
 }
 

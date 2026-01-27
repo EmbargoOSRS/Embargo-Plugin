@@ -17,7 +17,8 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 public class PlyExporter {
 
-    private static final int MAX_FILE_SIZE = 1024 * 1024; // 1MB limit
+    private static final int MAX_FILE_SIZE = 1024 * 1024; // 1MB limit for player/pet models
+    private static final int MAX_SCENE_FILE_SIZE = 5 * 1024 * 1024; // 5MB limit for scene models
 
     /**
      * Exports ModelData to PLY binary format (little-endian) with vertex colors.
@@ -26,6 +27,21 @@ public class PlyExporter {
      * @return byte array containing the PLY file, or null if export fails
      */
     public static byte[] export(ModelData modelData) {
+        return export(modelData, MAX_FILE_SIZE);
+    }
+
+    /**
+     * Exports ModelData to PLY binary format with a custom size limit.
+     * Use exportScene() for scene models which have a higher limit.
+     *
+     * @param modelData the model data to export
+     * @return byte array containing the PLY file, or null if export fails
+     */
+    public static byte[] exportScene(ModelData modelData) {
+        return export(modelData, MAX_SCENE_FILE_SIZE);
+    }
+
+    private static byte[] export(ModelData modelData, int maxSize) {
         if (modelData == null || !modelData.isValid()) {
             log.warn("Invalid model data provided for PLY export");
             return null;
@@ -43,8 +59,8 @@ public class PlyExporter {
 
             byte[] result = baos.toByteArray();
 
-            if (result.length > MAX_FILE_SIZE) {
-                log.warn("PLY file exceeds 1MB limit: {} bytes", result.length);
+            if (result.length > maxSize) {
+                log.warn("PLY file exceeds size limit ({} bytes): {} bytes", maxSize, result.length);
                 return null;
             }
 

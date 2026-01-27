@@ -5,8 +5,6 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.ItemContainerChanged;
-import net.runelite.api.events.NpcDespawned;
-import net.runelite.api.events.NpcSpawned;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
@@ -22,8 +20,9 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Manages 3D model extraction and upload for player characters and pets.
  * <p>
- * Captures player models on login, equipment changes, and pet spawns,
+ * Captures player models on login and equipment changes,
  * exports them to PLY format with vertex colors, and uploads to the Embargo API.
+ * Uses client.getFollower() to get pet model (matching RuneProfile's approach).
  */
 @Slf4j
 @Singleton
@@ -62,9 +61,6 @@ public class ModelUploadManager {
 
     private ScheduledExecutorService executor;
     private ScheduledFuture<?> debounceTask;
-
-    // Track current pet NPC for model extraction
-    private volatile NPC currentPet = null;
 
     /**
      * Starts the model upload manager.
@@ -112,7 +108,6 @@ public class ModelUploadManager {
             executor = null;
         }
 
-        currentPet = null;
         log.info("ModelUploadManager shut down");
     }
 
@@ -157,68 +152,7 @@ public class ModelUploadManager {
     }
 
     /**
-     * Handles NPC spawns to detect pets.
-     */
-    @Subscribe
-    public void onNpcSpawned(NpcSpawned event) {
-        if (!config.enableModelUploads() || !config.includePlayerPet()) {
-            return;
-        }
-
-        NPC npc = event.getNpc();
-        if (isPetNpc(npc)) {
-            currentPet = npc;
-            log.debug("Pet detected: {}", npc.getName());
-            scheduleDebounced();
-        }
-    }
-
-    /**
-     * Handles NPC despawns to clear pet reference.
-     */
-    @Subscribe
-    public void onNpcDespawned(NpcDespawned event) {
-        if (currentPet != null && currentPet == event.getNpc()) {
-            currentPet = null;
-            log.debug("Pet despawned");
-        }
-    }
-
-    /**
-     * Determines if an NPC is the player's pet (follower).
-     */
-    private boolean isPetNpc(NPC npc) {
-        if (npc == null || client.getLocalPlayer() == null) {
-            return false;
-        }
-
-        // Check if NPC is interacting with (following) the local player
-        Actor interacting = npc.getInteracting();
-        if (interacting != client.getLocalPlayer()) {
-            return false;
-        }
-
-        // Additional heuristics: pets typically have small size
-        NPCComposition composition = npc.getComposition();
-        if (composition == null) {
-            return false;
-        }
-
-        // Check if it's a follower-type NPC (size 1-2)
-        int size = composition.getSize();
-        if (size > 2) {
-            return false;
-        }
-
-        // Check proximity to player
-        Player player = client.getLocalPlayer();
-        int dx = Math.abs(npc.getWorldLocation().getX() - player.getWorldLocation().getX());
-        int dy = Math.abs(npc.getWorldLocation().getY() - player.getWorldLocation().getY());
-        return dx <= 2 && dy <= 2;
-    }
-
-    /**
-     * Schedules a debounced upload after equipment/pet changes settle.
+     * Schedules a debounced upload after equipment changes settle.
      */
     private void scheduleDebounced() {
         if (executor == null || executor.isShutdown()) {
@@ -333,29 +267,65 @@ public class ModelUploadManager {
             return;
         }
 
-        log.info("[ModelUpload] PLY export successful, size={} bytes", playerPly.length);
+        log.info("[ModelUpload] Player PLY export successful, size={} bytes", playerPly.length);
 
-        // Extract pet model if enabled and available
+        // Extract pet model using client.getFollower() (matching RuneProfile)
         byte[] petPly = null;
-        if (config.includePlayerPet() && currentPet != null) {
-            log.info("[ModelUpload] Extracting pet model: {}", currentPet.getName());
-            Model petModel = currentPet.getModel();
-            if (petModel != null) {
-                ModelData petModelData = extractModelData(petModel);
-                if (petModelData != null && petModelData.isValid()) {
-                    petPly = PlyExporter.export(petModelData);
-                    log.info("[ModelUpload] Pet PLY export successful, size={} bytes", petPly.length);
+        log.info("[ModelUpload] Config: includePlayerPet={}", config.includePlayerPet());
+        if (config.includePlayerPet()) {
+            NPC pet = client.getFollower();
+            if (pet != null) {
+                log.info("[ModelUpload] Pet detected: {} (ID: {})", pet.getName(), pet.getId());
+                log.info("[ModelUpload] Extracting pet model...");
+                Model petModel = pet.getModel();
+                if (petModel != null) {
+                    log.info("[ModelUpload] Pet model found, vertices={}, faces={}",
+                            petModel.getVerticesCount(), petModel.getFaceCount());
+                    ModelData petModelData = extractModelData(petModel);
+                    if (petModelData != null && petModelData.isValid()) {
+                        petPly = PlyExporter.export(petModelData);
+                        log.info("[ModelUpload] Pet PLY export successful, size={} bytes", petPly.length);
+                    } else {
+                        log.warn("[ModelUpload] Failed to extract pet model data");
+                    }
+                } else {
+                    log.warn("[ModelUpload] Pet model is null");
                 }
+            } else {
+                log.info("[ModelUpload] No pet/follower detected (client.getFollower() returned null)");
             }
+        } else {
+            log.info("[ModelUpload] Pet export disabled in config, skipping");
+        }
+
+        // Extract scene (3x3 tiles around player)
+        byte[] scenePly = null;
+        log.info("[ModelUpload] Config: includeScene={}", config.includeScene());
+        if (config.includeScene()) {
+            log.info("[ModelUpload] Extracting scene (3x3 tiles) around player...");
+            ModelData sceneModelData = SceneExporter.extractSceneAroundPlayer(client);
+            if (sceneModelData != null && sceneModelData.isValid()) {
+                scenePly = PlyExporter.exportScene(sceneModelData);
+                if (scenePly != null) {
+                    log.info("[ModelUpload] Scene PLY export successful, size={} bytes", scenePly.length);
+                } else {
+                    log.warn("[ModelUpload] Scene PLY export returned null");
+                }
+            } else {
+                log.warn("[ModelUpload] No scene data extracted (SceneExporter returned null/invalid)");
+            }
+        } else {
+            log.info("[ModelUpload] Scene export disabled in config, skipping");
         }
 
         // Upload asynchronously
         final byte[] finalPlayerPly = playerPly;
         final byte[] finalPetPly = petPly;
+        final byte[] finalScenePly = scenePly;
 
         if (executor != null && !executor.isShutdown()) {
             log.info("[ModelUpload] Queueing upload to API...");
-            executor.execute(() -> uploadModels(rsn, finalPlayerPly, finalPetPly));
+            executor.execute(() -> uploadModels(rsn, finalPlayerPly, finalPetPly, finalScenePly));
         } else {
             log.warn("[ModelUpload] Executor is null or shutdown, cannot upload");
         }
@@ -507,9 +477,9 @@ public class ModelUploadManager {
     /**
      * Uploads model files to the API via multipart POST.
      */
-    private void uploadModels(String rsn, byte[] playerPly, byte[] petPly) {
-        log.info("[ModelUpload] uploadModels() called for RSN: {}, playerPly={} bytes, petPly={} bytes",
-                rsn, playerPly.length, petPly != null ? petPly.length : 0);
+    private void uploadModels(String rsn, byte[] playerPly, byte[] petPly, byte[] scenePly) {
+        log.info("[ModelUpload] uploadModels() called for RSN: {}, playerPly={} bytes, petPly={} bytes, scenePly={} bytes",
+                rsn, playerPly.length, petPly != null ? petPly.length : 0, scenePly != null ? scenePly.length : 0);
 
         try {
             MultipartBody.Builder builder = new MultipartBody.Builder()
@@ -521,6 +491,11 @@ public class ModelUploadManager {
             if (petPly != null) {
                 builder.addFormDataPart("petModel", "pet.ply",
                         RequestBody.create(MediaType.parse("application/octet-stream"), petPly));
+            }
+
+            if (scenePly != null) {
+                builder.addFormDataPart("sceneModel", "scene.ply",
+                        RequestBody.create(MediaType.parse("application/octet-stream"), scenePly));
             }
 
             RequestBody requestBody = builder.build();
@@ -536,9 +511,10 @@ public class ModelUploadManager {
                 if (response.isSuccessful()) {
                     lastUploadTime.set(System.currentTimeMillis());
                     String body = response.body() != null ? response.body().string() : "";
-                    log.info("[ModelUpload] SUCCESS - Uploaded 3D models for {} (player: {} bytes{}). Response: {}",
+                    log.info("[ModelUpload] SUCCESS - Uploaded 3D models for {} (player: {} bytes{}{}). Response: {}",
                             rsn, playerPly.length,
                             petPly != null ? ", pet: " + petPly.length + " bytes" : "",
+                            scenePly != null ? ", scene: " + scenePly.length + " bytes" : "",
                             body);
                 } else {
                     String body = response.body() != null ? response.body().string() : "";

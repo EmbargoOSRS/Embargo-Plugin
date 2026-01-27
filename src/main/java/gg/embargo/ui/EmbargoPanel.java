@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import gg.embargo.DataManager;
 import gg.embargo.EmbargoConfig;
 import gg.embargo.EmbargoPlugin;
+import gg.embargo.models.ModelUploadManager;
 import gg.embargo.bingo.BingoManager;
 import gg.embargo.bingo.BingoState;
 import gg.embargo.bingo.BingoTeam;
@@ -91,6 +92,9 @@ public class EmbargoPanel extends PluginPanel {
 
     @Inject
     private OkHttpClient okHttpClient;
+
+    @Inject
+    private ModelUploadManager modelUploadManager;
 
     @Setter
     public boolean isLoggedIn = false;
@@ -426,6 +430,35 @@ public class EmbargoPanel extends PluginPanel {
                 "https://github.com/EmbargoOSRS/Embargo-Plugin"));
 
         wrapper.add(actionsContainer);
+
+        // Dev Tools section
+        wrapper.add(Box.createVerticalStrut(10));
+        JLabel devHeader = new JLabel("Dev Tools");
+        devHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
+        devHeader.setForeground(Color.WHITE);
+        devHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        wrapper.add(devHeader);
+        wrapper.add(Box.createVerticalStrut(8));
+
+        JPanel devActionsContainer = new JPanel();
+        devActionsContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        devActionsContainer.setLayout(new GridLayout(0, 1, 0, 8));
+        devActionsContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        devActionsContainer.add(buildLinkPanel(WEBSITE_ICON, "Upload 3D Model", "(bypass cooldown)", () -> {
+            if (modelUploadManager != null && modelUploadManager.isStarted()) {
+                modelUploadManager.manualUpload();
+                if (client != null && client.getGameState() == GameState.LOGGED_IN) {
+                    clientThread.invokeLater(() -> {
+                        client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+                                getEmbargoTag() + " Manual model upload triggered.", null);
+                    });
+                }
+            }
+        }));
+
+        wrapper.add(devActionsContainer);
+
         return wrapper;
     }
 
