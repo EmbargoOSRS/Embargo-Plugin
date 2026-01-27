@@ -81,6 +81,7 @@ public class PlyExporter {
     /**
      * Writes vertex data as little-endian int16 coordinates + uint8 RGB colors.
      * Format per vertex: x(2) + y(2) + z(2) + r(1) + g(1) + b(1) = 9 bytes
+     * Note: Y and Z are swapped when writing (matching RuneProfile's coordinate transform)
      */
     private static void writeVertices(ByteArrayOutputStream baos, ModelData modelData)
             throws IOException {
@@ -89,10 +90,10 @@ public class PlyExporter {
 
         for (int i = 0; i < modelData.getVertexCount(); i++) {
             buffer.clear();
-            // Coordinates as int16 (short)
+            // Coordinates as int16 (short) - Y and Z swapped for coordinate system conversion
             buffer.putShort(modelData.getVerticesX()[i]);
-            buffer.putShort(modelData.getVerticesY()[i]);
-            buffer.putShort(modelData.getVerticesZ()[i]);
+            buffer.putShort(modelData.getVerticesZ()[i]);  // Write Z as Y
+            buffer.putShort(modelData.getVerticesY()[i]);  // Write Y as Z
             // Colors as uint8
             buffer.put(modelData.getVertexColorsR()[i]);
             buffer.put(modelData.getVertexColorsG()[i]);

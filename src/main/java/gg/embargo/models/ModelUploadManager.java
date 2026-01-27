@@ -418,18 +418,18 @@ public class ModelUploadManager {
                 int outIdx2 = face * 3 + 1;
                 int outIdx3 = face * 3 + 2;
 
-                // Copy vertex positions with coordinate flip (y = -y, z = -z)
+                // Copy vertex positions with Y negated (matching RuneProfile)
                 verticesX[outIdx1] = clampToShort((int) srcVerticesX[v1Idx]);
                 verticesY[outIdx1] = clampToShort((int) -srcVerticesY[v1Idx]);
-                verticesZ[outIdx1] = clampToShort((int) -srcVerticesZ[v1Idx]);
+                verticesZ[outIdx1] = clampToShort((int) srcVerticesZ[v1Idx]);
 
                 verticesX[outIdx2] = clampToShort((int) srcVerticesX[v2Idx]);
                 verticesY[outIdx2] = clampToShort((int) -srcVerticesY[v2Idx]);
-                verticesZ[outIdx2] = clampToShort((int) -srcVerticesZ[v2Idx]);
+                verticesZ[outIdx2] = clampToShort((int) srcVerticesZ[v2Idx]);
 
                 verticesX[outIdx3] = clampToShort((int) srcVerticesX[v3Idx]);
                 verticesY[outIdx3] = clampToShort((int) -srcVerticesY[v3Idx]);
-                verticesZ[outIdx3] = clampToShort((int) -srcVerticesZ[v3Idx]);
+                verticesZ[outIdx3] = clampToShort((int) srcVerticesZ[v3Idx]);
 
                 // Determine colors for each vertex of this face
                 int color1, color2, color3;
@@ -471,7 +471,7 @@ public class ModelUploadManager {
                 colorsG[outIdx3] = (byte) JagexColor.getGreen(color3);
                 colorsB[outIdx3] = (byte) JagexColor.getBlue(color3);
 
-                // Set face indices (sequential in exploded mesh)
+                // Set face indices (sequential order matching RuneProfile)
                 faceIndices1[face] = outIdx1;
                 faceIndices2[face] = outIdx2;
                 faceIndices3[face] = outIdx3;
