@@ -35,22 +35,6 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Central manager for all bingo-related functionality.
- * <p>
- * This class handles:
- * <ul>
- * <li>Fetching and caching bingo state from the server</li>
- * <li>Detecting loot drops that match bingo tiles</li>
- * <li>Submitting drop completions to the server</li>
- * <li>Fetching and announcing tile completions</li>
- * <li>Managing the bingo tracking enabled/disabled state</li>
- * </ul>
- * <p>
- * The manager follows RuneLite's singleton pattern and integrates with the
- * event bus
- * for game event handling.
- */
 @Slf4j
 @Singleton
 public class BingoManager {
@@ -63,7 +47,6 @@ public class BingoManager {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    // Chat message patterns for detection
     private static final Pattern COLLECTION_LOG_PATTERN = Pattern.compile(
             "New item added to your collection log: (.*)");
     private static final Pattern PET_DROP_PATTERN = Pattern.compile(
@@ -71,7 +54,6 @@ public class BingoManager {
     private static final Pattern PET_INSURED_PATTERN = Pattern.compile(
             "You feel something weird sneaking into your backpack\\.");
 
-    // Refresh intervals
     private static final int STATE_REFRESH_INTERVAL_SECONDS = 60;
     private static final int COMPLETIONS_REFRESH_INTERVAL_SECONDS = 30;
 
@@ -100,88 +82,32 @@ public class BingoManager {
     @Nullable
     private BingoScreenshotManager screenshotManager;
 
-    /**
-     * Current bingo states (empty if no active bingos)
-     */
     @Getter
     private volatile List<BingoState> currentStates = new CopyOnWriteArrayList<>();
 
-    /**
-     * Gets the [Embargo] tag with the configured color for chat messages.
-     *
-     * @return the formatted [Embargo] tag
-     */
     private String getEmbargoTag() {
         java.awt.Color color = config.embargoMessageColor();
         String hex = String.format("%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue());
         return "<col=" + hex + ">[Embargo]</col>";
     }
 
-    /**
-     * Gets the first bingo state (for backwards compatibility).
-     * @return the first bingo state, or null if none
-     * @deprecated Use {@link #getCurrentStates()} instead
-     */
     @Deprecated
     public BingoState getCurrentState() {
         List<BingoState> states = currentStates;
         return states.isEmpty() ? null : states.get(0);
     }
 
-    /**
-     * Whether bingo tracking is currently active
-     */
     private final AtomicBoolean trackingActive = new AtomicBoolean(false);
-
-    /**
-     * Whether the manager has been started
-     */
     private final AtomicBoolean started = new AtomicBoolean(false);
-
-    /**
-     * Set of completion event IDs that have already been announced
-     */
     private final Set<Integer> announcedCompletionIds = ConcurrentHashMap.newKeySet();
-
-    /**
-     * Queue of drops pending submission
-     */
     private final ConcurrentLinkedQueue<BingoDropSubmission> pendingSubmissions = new ConcurrentLinkedQueue<>();
-
-    /**
-     * Executor for async operations
-     */
     private ScheduledExecutorService executor;
-
-    /**
-     * Future for periodic state refresh
-     */
     private ScheduledFuture<?> stateRefreshFuture;
-
-    /**
-     * Future for periodic completions check
-     */
     private ScheduledFuture<?> completionsRefreshFuture;
-
-    /**
-     * Last time completions were fetched (for incremental fetching)
-     */
     private final AtomicLong lastCompletionsFetchTime = new AtomicLong(0);
-
-    /**
-     * Callbacks to invoke when bingo state changes
-     */
     private final List<Consumer<List<BingoState>>> stateChangeListeners = new CopyOnWriteArrayList<>();
-
-    /**
-     * Callbacks to invoke when a tile is completed
-     */
     private final List<Consumer<BingoCompletionEvent>> completionListeners = new CopyOnWriteArrayList<>();
 
-    /**
-     * Starts the bingo manager and begins tracking.
-     * Should be called when the plugin starts up.
-     */
     public void startUp() {
         if (started.getAndSet(true)) {
             log.debug("BingoManager already started");
@@ -198,10 +124,8 @@ public class BingoManager {
 
         eventBus.register(this);
 
-        // Initial state fetch
         refreshBingoState();
 
-        // Schedule periodic refresh
         stateRefreshFuture = executor.scheduleAtFixedRate(
                 this::refreshBingoState,
                 STATE_REFRESH_INTERVAL_SECONDS,
@@ -217,10 +141,6 @@ public class BingoManager {
         trackingActive.set(true);
     }
 
-    /**
-     * Shuts down the bingo manager and cleans up resources.
-     * Should be called when the plugin shuts down.
-     */
     public void shutDown() {
         if (!started.getAndSet(false)) {
             return;
@@ -261,69 +181,33 @@ public class BingoManager {
         completionListeners.clear();
     }
 
-    /**
-     * Registers a listener for bingo state changes.
-     *
-     * @param listener the callback to invoke when state changes (receives list of all bingo states)
-     */
     public void addStateChangeListener(Consumer<List<BingoState>> listener) {
         stateChangeListeners.add(listener);
     }
 
-    /**
-     * Unregisters a state change listener.
-     *
-     * @param listener the listener to remove
-     */
     public void removeStateChangeListener(Consumer<List<BingoState>> listener) {
         stateChangeListeners.remove(listener);
     }
 
-    /**
-     * Registers a listener for tile completion events.
-     *
-     * @param listener the callback to invoke when a tile is completed
-     */
     public void addCompletionListener(Consumer<BingoCompletionEvent> listener) {
         completionListeners.add(listener);
     }
 
-    /**
-     * Unregisters a completion listener.
-     *
-     * @param listener the listener to remove
-     */
     public void removeCompletionListener(Consumer<BingoCompletionEvent> listener) {
         completionListeners.remove(listener);
     }
 
-    /**
-     * Checks if the user is currently enrolled in any active bingo.
-     *
-     * @return true if enrolled in at least one active bingo
-     */
     public boolean isEnrolledAndActive() {
         return currentStates.stream()
                 .anyMatch(state -> state.isEnrolled() && state.isActive());
     }
 
-    /**
-     * Gets all bingo states where the user is enrolled and the bingo is active.
-     *
-     * @return list of active enrolled bingo states
-     */
     public List<BingoState> getActiveEnrolledStates() {
         return currentStates.stream()
                 .filter(state -> state.isEnrolled() && state.isActive())
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Gets a specific bingo state by board ID.
-     *
-     * @param boardId the bingo board ID
-     * @return the bingo state, or null if not found
-     */
     @Nullable
     public BingoState getStateByBoardId(int boardId) {
         return currentStates.stream()
@@ -332,11 +216,6 @@ public class BingoManager {
                 .orElse(null);
     }
 
-    /**
-     * Checks if tracking is enabled via config and we have an active bingo.
-     *
-     * @return true if drops should be tracked
-     */
     public boolean shouldTrackDrops() {
         return trackingActive.get()
                 && config.enableBingo()
@@ -344,11 +223,6 @@ public class BingoManager {
                 && isEnrolledAndActive();
     }
 
-    /**
-     * Gets all bingo states that should track drops.
-     *
-     * @return list of bingo states that should track drops
-     */
     public List<BingoState> getTrackingStates() {
         if (!trackingActive.get() || !config.enableBingo() || !config.enableBingoTracking()) {
             return Collections.emptyList();
@@ -356,12 +230,6 @@ public class BingoManager {
         return getActiveEnrolledStates();
     }
 
-    /**
-     * Gets the secret codeword for the first enrolled active bingo.
-     *
-     * @return the codeword or null
-     * @deprecated Use {@link #getCodewords()} instead for multiple bingo support
-     */
     @Deprecated
     @Nullable
     public String getCodeword() {
@@ -373,11 +241,6 @@ public class BingoManager {
                 .orElse(null);
     }
 
-    /**
-     * Gets all codewords for active enrolled bingos.
-     *
-     * @return map of bingo name to codeword (excludes bingos without codewords)
-     */
     public Map<String, String> getCodewords() {
         Map<String, String> codewords = new LinkedHashMap<>();
         for (BingoState state : currentStates) {
@@ -388,9 +251,6 @@ public class BingoManager {
         return codewords;
     }
 
-    /**
-     * Refreshes the bingo state from the server.
-     */
     public void refreshBingoState() {
         if (client == null || client.getLocalPlayer() == null) {
             return;
@@ -408,11 +268,6 @@ public class BingoManager {
         fetchBingoStateAsync(username);
     }
 
-    /**
-     * Fetches the active bingo state from the server asynchronously.
-     *
-     * @param username the player's RSN
-     */
     private void fetchBingoStateAsync(String username) {
         String url = BINGO_ACTIVE_ENDPOINT + "?rsn=" + username;
 
@@ -432,7 +287,6 @@ public class BingoManager {
                 try (response) {
                     if (!response.isSuccessful()) {
                         if (response.code() == 404) {
-                            // No active bingo
                             log.debug("Bingo state: No active bingo (404)");
                             updateStates(Collections.emptyList());
                         } else {
@@ -466,13 +320,6 @@ public class BingoManager {
         });
     }
 
-    /**
-     * Parses the bingo states JSON response into a list of BingoState objects.
-     * Handles both the new format (with "bingos" array) and legacy single-bingo format.
-     *
-     * @param json the JSON string from the API
-     * @return the list of parsed BingoStates (may be empty, never null)
-     */
     private List<BingoState> parseBingoStates(String json) {
         try {
             JsonObject root = gson.fromJson(json, JsonObject.class);
@@ -480,14 +327,12 @@ public class BingoManager {
                 return Collections.emptyList();
             }
 
-            // Check if there's any active bingo
             if (root.has("active") && !root.get("active").getAsBoolean()) {
                 return Collections.emptyList();
             }
 
             List<BingoState> states = new ArrayList<>();
 
-            // Check for new format with "bingos" array
             if (root.has("bingos") && root.get("bingos").isJsonArray()) {
                 JsonArray bingosArray = root.getAsJsonArray("bingos");
                 for (JsonElement element : bingosArray) {
@@ -499,7 +344,6 @@ public class BingoManager {
                     }
                 }
             } else {
-                // Legacy single-bingo format - parse the root object directly
                 BingoState state = parseSingleBingoState(root);
                 if (state != null) {
                     states.add(state);
@@ -513,16 +357,9 @@ public class BingoManager {
         }
     }
 
-    /**
-     * Parses a single bingo state from a JsonObject.
-     *
-     * @param obj the JSON object containing bingo data
-     * @return the parsed BingoState or null if parsing fails
-     */
     @Nullable
     private BingoState parseSingleBingoState(JsonObject obj) {
         try {
-            // Parse basic board info
             int id = obj.has("id") ? obj.get("id").getAsInt() : 0;
             String name = obj.has("name") ? obj.get("name").getAsString() : "";
             String description = obj.has("description") && !obj.get("description").isJsonNull()
@@ -537,12 +374,10 @@ public class BingoManager {
             Instant startDate = parseInstant(obj, "startDate");
             Instant endDate = parseInstant(obj, "endDate");
 
-            // Parse tiles - handle both array and object formats
             Map<Integer, BingoTile> tiles = new HashMap<>();
             if (obj.has("tiles")) {
                 JsonElement tilesElement = obj.get("tiles");
                 if (tilesElement.isJsonArray()) {
-                    // Array format: [{id: 1, ...}, {id: 2, ...}]
                     for (JsonElement tileElement : tilesElement.getAsJsonArray()) {
                         BingoTile tile = parseTile(tileElement.getAsJsonObject());
                         if (tile != null) {
@@ -550,7 +385,6 @@ public class BingoManager {
                         }
                     }
                 } else if (tilesElement.isJsonObject()) {
-                    // Object format: {"1": {id: 1, ...}, "2": {id: 2, ...}}
                     JsonObject tilesObj = tilesElement.getAsJsonObject();
                     for (String key : tilesObj.keySet()) {
                         BingoTile tile = parseTile(tilesObj.getAsJsonObject(key));
@@ -561,18 +395,15 @@ public class BingoManager {
                 }
             }
 
-            // Parse user's team (may be null if not enrolled)
             BingoTeam userTeam = null;
             if (obj.has("userTeam") && !obj.get("userTeam").isJsonNull()) {
                 userTeam = parseTeam(obj.getAsJsonObject("userTeam"));
             }
 
-            // Parse team's progress - handle both array and object formats
             Map<Integer, BingoTeamTileProgress> teamProgress = new HashMap<>();
             if (obj.has("teamProgress")) {
                 JsonElement progressElement = obj.get("teamProgress");
                 if (progressElement.isJsonArray()) {
-                    // Array format: [{bingoTileId: 1, ...}, {bingoTileId: 2, ...}]
                     for (JsonElement elem : progressElement.getAsJsonArray()) {
                         BingoTeamTileProgress progress = parseProgress(elem.getAsJsonObject());
                         if (progress != null) {
@@ -580,7 +411,6 @@ public class BingoManager {
                         }
                     }
                 } else if (progressElement.isJsonObject()) {
-                    // Object format: {"1": {bingoTileId: 1, ...}, "2": {bingoTileId: 2, ...}}
                     JsonObject progressObj = progressElement.getAsJsonObject();
                     for (String key : progressObj.keySet()) {
                         BingoTeamTileProgress progress = parseProgress(progressObj.getAsJsonObject(key));
@@ -642,7 +472,6 @@ public class BingoManager {
             String tileTypeStr = obj.has("tileType") ? obj.get("tileType").getAsString() : "single";
             int requiredCount = obj.has("requiredCount") ? obj.get("requiredCount").getAsInt() : 1;
 
-            // Parse item requirements
             List<BingoItemRequirement> itemRequirements = new ArrayList<>();
             if (obj.has("itemRequirements") && obj.get("itemRequirements").isJsonArray()) {
                 for (JsonElement reqElement : obj.getAsJsonArray("itemRequirements")) {
@@ -653,7 +482,6 @@ public class BingoManager {
                 }
             }
 
-            // Parse item groups (for grouped tiles)
             List<BingoItemGroup> itemGroups = new ArrayList<>();
             if (obj.has("itemGroups") && obj.get("itemGroups").isJsonArray()) {
                 for (JsonElement groupElement : obj.getAsJsonArray("itemGroups")) {
@@ -707,7 +535,6 @@ public class BingoManager {
 
     private BingoItemGroup parseItemGroup(JsonObject obj) {
         try {
-            // Parse items within the group
             List<BingoItemRequirement> items = new ArrayList<>();
             if (obj.has("items") && obj.get("items").isJsonArray()) {
                 for (JsonElement itemElement : obj.getAsJsonArray("items")) {
@@ -794,14 +621,10 @@ public class BingoManager {
         }
     }
 
-    /**
-     * Updates the current states and notifies listeners.
-     */
     private void updateStates(List<BingoState> newStates) {
         List<BingoState> oldStates = currentStates;
         currentStates = newStates != null ? new CopyOnWriteArrayList<>(newStates) : new CopyOnWriteArrayList<>();
 
-        // Only notify if states actually changed
         if (!oldStates.equals(currentStates)) {
             for (Consumer<List<BingoState>> listener : stateChangeListeners) {
                 try {
@@ -813,22 +636,17 @@ public class BingoManager {
         }
     }
 
-    /**
-     * Handles loot received events to detect bingo drops.
-     */
     @Subscribe
     public void onLootReceived(LootReceived event) {
         if (!shouldTrackDrops()) {
             return;
         }
 
-        // Only track NPC and EVENT loot types
         LootRecordType eventType = event.getType();
         if (eventType != LootRecordType.NPC && eventType != LootRecordType.EVENT) {
             return;
         }
 
-        // Only track standard profile
         if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD) {
             return;
         }
@@ -840,19 +658,15 @@ public class BingoManager {
 
         String source = event.getName();
 
-        // Check each item in the loot against all active bingo states
         for (ItemStack itemStack : event.getItems()) {
             int itemId = itemStack.getId();
 
-            // Get item name once
             ItemComposition itemComp = itemManager.getItemComposition(itemId);
             String itemName = itemComp != null ? itemComp.getName() : "Unknown";
 
-            // Check each bingo state for matching tiles
             for (BingoState state : trackingStates) {
                 Set<Integer> matchingTileIds = state.getTileIdsForItem(itemId);
                 if (!matchingTileIds.isEmpty()) {
-                    // Submit drop for each matching tile (skip already completed tiles)
                     for (int tileId : matchingTileIds) {
                         BingoTeamTileProgress progress = state.getProgress(tileId);
                         if (progress != null && progress.isCompleted()) {
@@ -866,9 +680,6 @@ public class BingoManager {
         }
     }
 
-    /**
-     * Handles chat messages to detect collection log unlocks and pet drops.
-     */
     @Subscribe
     public void onChatMessage(ChatMessage event) {
         if (!shouldTrackDrops()) {
@@ -881,14 +692,11 @@ public class BingoManager {
 
         String message = Text.removeTags(event.getMessage());
 
-        // Check for pet drops
         if (PET_DROP_PATTERN.matcher(message).find() || PET_INSURED_PATTERN.matcher(message).find()) {
             handlePetDrop();
             return;
         }
 
-        // Check for collection log unlocks - these help us catch items we might have
-        // missed
         Matcher clogMatcher = COLLECTION_LOG_PATTERN.matcher(message);
         if (clogMatcher.matches()) {
             String itemName = clogMatcher.group(1);
@@ -896,11 +704,6 @@ public class BingoManager {
         }
     }
 
-    /**
-     * Handles a pet drop detection.
-     * Note: We can't easily determine which pet without additional context,
-     * so this submits a generic pet drop that the server will need to match.
-     */
     private void handlePetDrop() {
         List<BingoState> trackingStates = getTrackingStates();
         if (trackingStates.isEmpty()) {
@@ -912,11 +715,9 @@ public class BingoManager {
         }
         String playerName = client.getLocalPlayer().getName();
 
-        // Check all active bingo states for pet-type tiles
         for (BingoState state : trackingStates) {
             for (BingoTile tile : state.getTilesByPosition()) {
                 if (tile.getTileType() == BingoTileType.PET) {
-                    // Skip already completed tiles
                     BingoTeamTileProgress progress = state.getProgress(tile.getId());
                     if (progress != null && progress.isCompleted()) {
                         log.debug("Skipping pet drop for already completed tile {}", tile.getId());
@@ -927,7 +728,7 @@ public class BingoManager {
                             .bingoBoardId(state.getId())
                             .tileId(tile.getId())
                             .playerName(playerName)
-                            .itemId(-1) // Pet drops don't have a simple item ID
+                            .itemId(-1)
                             .itemName("Pet")
                             .quantity(1)
                             .source("Pet Drop")
@@ -937,7 +738,6 @@ public class BingoManager {
 
                     submitDropAsync(submission);
 
-                    // Capture screenshot for pet
                     if (screenshotManager != null) {
                         screenshotManager.captureAndUpload(state.getId(), tile.getId(), -1, "Pet");
                     }
@@ -946,10 +746,6 @@ public class BingoManager {
         }
     }
 
-    /**
-     * Handles a collection log unlock to check if it matches any bingo tile.
-     * This is a backup detection method - loot tracking should catch most items.
-     */
     private void handleCollectionLogUnlock(String itemName) {
         List<BingoState> trackingStates = getTrackingStates();
         if (trackingStates.isEmpty()) {
@@ -960,23 +756,17 @@ public class BingoManager {
             return;
         }
 
-        // Try to find the item ID from the name
-        // This is a backup path, so we log it but don't fail if we can't match
         log.debug("Collection log unlock detected: {}", itemName);
 
-        // The server can match by item name if we don't have the ID
         String playerName = client.getLocalPlayer().getName();
 
-        // Check all active bingo states for matching item requirements
         for (BingoState state : trackingStates) {
             for (BingoTile tile : state.getTilesByPosition()) {
-                // Skip already completed tiles
                 BingoTeamTileProgress progress = state.getProgress(tile.getId());
                 if (progress != null && progress.isCompleted()) {
                     continue;
                 }
 
-                // Check if any item requirement name matches
                 for (BingoItemRequirement req : tile.getItemRequirements()) {
                     if (req.getItemName() != null && req.getItemName().equalsIgnoreCase(itemName)) {
                         BingoDropSubmission submission = BingoDropSubmission.builder()
@@ -998,18 +788,6 @@ public class BingoManager {
         }
     }
 
-    /**
-     * Submits a drop to the server.
-     *
-     * @param state             the current bingo state
-     * @param tileId            the tile ID
-     * @param itemId            the item ID
-     * @param itemName          the item name
-     * @param quantity          the quantity
-     * @param source            the drop source
-     * @param fromCollectionLog whether detected from collection log
-     * @param isPet             whether this is a pet drop
-     */
     private void submitDrop(BingoState state, int tileId, int itemId, String itemName,
             int quantity, String source, boolean fromCollectionLog, boolean isPet) {
         if (client.getLocalPlayer() == null) {
@@ -1032,7 +810,6 @@ public class BingoManager {
 
         submitDropAsync(submission);
 
-        // Only capture screenshot and announce if the tile still needs progress
         BingoTile tile = state.getTile(tileId);
         if (tile != null) {
             BingoTeamTileProgress progress = state.getProgress(tileId);
@@ -1040,20 +817,15 @@ public class BingoManager {
             int requiredCount = tile.getRequiredCount();
 
             if (currentCount < requiredCount) {
-                // Capture screenshot
                 if (screenshotManager != null && !fromCollectionLog) {
                     screenshotManager.captureAndUpload(state.getId(), tileId, itemId, itemName);
                 }
 
-                // Send local announcement
                 announceLocalDrop(playerName, tile.getTitle(), itemName, state.getUserTeam());
             }
         }
     }
 
-    /**
-     * Submits a drop to the server asynchronously.
-     */
     private void submitDropAsync(BingoDropSubmission submission) {
         if (executor == null || executor.isShutdown()) {
             pendingSubmissions.add(submission);
@@ -1089,11 +861,9 @@ public class BingoManager {
                         log.debug("Successfully submitted bingo drop: {} -> tile {}",
                                 submission.getItemName(), submission.getTileId());
 
-                        // Refresh state to get updated progress
                         refreshBingoState();
                     } else {
                         log.warn("Failed to submit bingo drop: {}", response.code());
-                        // Queue for retry
                         pendingSubmissions.add(submission);
                     }
                 }
@@ -1104,9 +874,6 @@ public class BingoManager {
         });
     }
 
-    /**
-     * Announces a local drop in chat.
-     */
     private void announceLocalDrop(String rsn, String tileName, String itemName, @Nullable BingoTeam team) {
         if (client == null || client.getGameState() != GameState.LOGGED_IN) {
             return;
@@ -1118,8 +885,6 @@ public class BingoManager {
 
         String teamName = team != null ? team.getName() : "your team";
 
-        // This method is called from onLootReceived/onChatMessage which already run on the client thread,
-        // so we can add the chat message directly without invokeLater to avoid micro stutters
         client.addChatMessage(
                 ChatMessageType.GAMEMESSAGE,
                 "",
@@ -1130,9 +895,6 @@ public class BingoManager {
                 null);
     }
 
-    /**
-     * Fetches and announces recent tile completions from the server.
-     */
     private void fetchAndAnnounceCompletions() {
         if (!isEnrolledAndActive()) {
             return;
@@ -1143,15 +905,11 @@ public class BingoManager {
             return;
         }
 
-        // Fetch completions for each active bingo
         for (BingoState state : activeStates) {
             fetchCompletionsForBoard(state.getId());
         }
     }
 
-    /**
-     * Fetches completions for a specific bingo board.
-     */
     private void fetchCompletionsForBoard(int boardId) {
         if (client == null || client.getLocalPlayer() == null) {
             return;
@@ -1215,10 +973,8 @@ public class BingoManager {
                                 : null)
                         .build();
 
-                // Announce the completion
                 announceCompletion(completion);
 
-                // Notify listeners
                 for (Consumer<BingoCompletionEvent> listener : completionListeners) {
                     try {
                         listener.accept(completion);
@@ -1232,9 +988,6 @@ public class BingoManager {
         }
     }
 
-    /**
-     * Announces a tile completion in chat.
-     */
     private void announceCompletion(BingoCompletionEvent completion) {
         if (client == null || client.getGameState() != GameState.LOGGED_IN) {
             return;
@@ -1271,9 +1024,6 @@ public class BingoManager {
         });
     }
 
-    /**
-     * Notifies the server that the user has disabled bingo tracking.
-     */
     public void notifyTrackingDisabled() {
         if (client == null || client.getLocalPlayer() == null) {
             return;
@@ -1303,19 +1053,11 @@ public class BingoManager {
         });
     }
 
-    /**
-     * Called when the user logs out - clears session-specific data.
-     */
     public void onLogout() {
         announcedCompletionIds.clear();
         lastCompletionsFetchTime.set(0);
     }
 
-    /**
-     * Sends a bingo start/status alert to the user for all active bingos.
-     *
-     * @param isFirstLogin true if this is the first login of the session
-     */
     public void sendBingoAlert(boolean isFirstLogin) {
         List<BingoState> activeStates = getActiveEnrolledStates();
         if (activeStates.isEmpty()) {

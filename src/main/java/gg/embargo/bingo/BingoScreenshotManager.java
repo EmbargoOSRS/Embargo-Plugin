@@ -24,14 +24,6 @@ import java.util.Iterator;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Manages screenshot capture and upload for bingo tile completions.
- * <p>
- * Screenshots are captured using RuneLite's DrawManager and uploaded
- * to both the Embargo API and a Discord webhook.
- * <p>
- * This follows the pattern used by RuneLite's ScreenshotPlugin.
- */
 @Slf4j
 @Singleton
 public class BingoScreenshotManager {
@@ -40,13 +32,8 @@ public class BingoScreenshotManager {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    // Maximum image dimension (resize if larger) - reduced to keep uploads small
     private static final int MAX_IMAGE_DIMENSION = 1280;
-
-    // JPEG quality for compression (0.0 - 1.0)
     private static final float JPEG_QUALITY = 0.75f;
-
-    // Queue for rate limiting uploads
     private static final int MAX_CONCURRENT_UPLOADS = 2;
 
     @Inject
@@ -71,12 +58,8 @@ public class BingoScreenshotManager {
     private ExecutorService uploadExecutor;
     private final Semaphore uploadSemaphore = new Semaphore(MAX_CONCURRENT_UPLOADS);
 
-    // Queue of pending screenshots in case of upload failure
     private final ConcurrentLinkedQueue<PendingScreenshot> pendingScreenshots = new ConcurrentLinkedQueue<>();
 
-    /**
-     * Starts the screenshot manager.
-     */
     public void startUp() {
         if (started.getAndSet(true)) {
             return;
@@ -91,9 +74,6 @@ public class BingoScreenshotManager {
         log.debug("BingoScreenshotManager started");
     }
 
-    /**
-     * Shuts down the screenshot manager.
-     */
     public void shutDown() {
         if (!started.getAndSet(false)) {
             return;
@@ -116,17 +96,6 @@ public class BingoScreenshotManager {
         log.debug("BingoScreenshotManager shut down");
     }
 
-    /**
-     * Captures a screenshot and uploads it for the given tile/item.
-     * <p>
-     * This method is safe to call from any thread. The screenshot will be
-     * captured on the next frame render.
-     *
-     * @param boardId  the bingo board ID
-     * @param tileId   the bingo tile ID
-     * @param itemId   the item ID that triggered the screenshot
-     * @param itemName the item name for logging
-     */
     public void captureAndUpload(int boardId, int tileId, int itemId, String itemName) {
         if (!started.get() || uploadExecutor == null) {
             log.debug("Screenshot manager not started, skipping capture");
@@ -142,34 +111,18 @@ public class BingoScreenshotManager {
 
         log.debug("Queuing screenshot capture for tile {} ({}) on board {}", tileId, itemName, boardId);
 
-        // Request the next frame for screenshot capture
         drawManager.requestNextFrameListener(image -> {
-            // This callback runs during the render cycle, so we need to
-            // process the image asynchronously
             BufferedImage screenshot = (BufferedImage) image;
 
-            // Submit to upload executor
             uploadExecutor.submit(() -> {
                 processAndUpload(screenshot, boardId, tileId, itemId, itemName, playerName, world);
             });
         });
     }
 
-    /**
-     * Processes and uploads a screenshot.
-     *
-     * @param image      the captured screenshot
-     * @param boardId    the bingo board ID
-     * @param tileId     the tile ID
-     * @param itemId     the item ID
-     * @param itemName   the item name
-     * @param playerName the player's RSN
-     * @param world      the current world
-     */
     private void processAndUpload(BufferedImage image, int boardId, int tileId, int itemId,
             String itemName, String playerName, int world) {
         try {
-            // Acquire semaphore for rate limiting
             if (!uploadSemaphore.tryAcquire(10, TimeUnit.SECONDS)) {
                 log.warn("Screenshot upload rate limited, queuing for later");
                 queuePendingScreenshot(image, boardId, tileId, itemId, itemName, playerName, world);
@@ -177,13 +130,10 @@ public class BingoScreenshotManager {
             }
 
             try {
-                // Resize if necessary
                 BufferedImage processedImage = resizeIfNecessary(image);
 
-                // Convert to PNG bytes
                 byte[] imageBytes = toBytes(processedImage);
 
-                // Upload to API
                 uploadToApi(imageBytes, boardId, tileId, itemId, itemName, playerName, world);
 
             } finally {
@@ -197,9 +147,6 @@ public class BingoScreenshotManager {
         }
     }
 
-    /**
-     * Resizes an image if it exceeds the maximum dimension.
-     */
     private BufferedImage resizeIfNecessary(BufferedImage image) {
         int width = image.getWidth();
         int height = image.getHeight();
@@ -223,12 +170,7 @@ public class BingoScreenshotManager {
         return resized;
     }
 
-    /**
-     * Converts a BufferedImage to compressed JPEG bytes.
-     * Uses JPEG compression to reduce file size for uploads.
-     */
     private byte[] toBytes(BufferedImage image) throws IOException {
-        // Ensure image is in RGB format (JPEG doesn't support alpha)
         BufferedImage rgbImage = image;
         if (image.getType() != BufferedImage.TYPE_INT_RGB) {
             rgbImage = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
@@ -237,10 +179,8 @@ public class BingoScreenshotManager {
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
 
-        // Get JPEG writer
         Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpg");
         if (!writers.hasNext()) {
-            // Fallback to PNG if no JPEG writer available
             ImageIO.write(rgbImage, "png", baos);
             return baos.toByteArray();
         }
@@ -249,7 +189,6 @@ public class BingoScreenshotManager {
         try (ImageOutputStream ios = ImageIO.createImageOutputStream(baos)) {
             writer.setOutput(ios);
 
-            // Set compression quality
             ImageWriteParam param = writer.getDefaultWriteParam();
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
             param.setCompressionQuality(JPEG_QUALITY);
@@ -262,16 +201,11 @@ public class BingoScreenshotManager {
         return baos.toByteArray();
     }
 
-    /**
-     * Uploads the screenshot to the API using JSON with base64-encoded image.
-     */
     private void uploadToApi(byte[] imageBytes, int boardId, int tileId, int itemId,
             String itemName, String playerName, int world) {
         try {
-            // Convert image to base64
             String screenshotBase64 = Base64.getEncoder().encodeToString(imageBytes);
 
-            // Build JSON payload
             JsonObject payload = new JsonObject();
             payload.addProperty("rsn", playerName);
             payload.addProperty("boardId", boardId);
@@ -290,7 +224,6 @@ public class BingoScreenshotManager {
                 if (response.isSuccessful()) {
                     log.info("Successfully uploaded bingo screenshot for tile {} ({})", tileId, itemName);
 
-                    // Parse response to get the screenshot URL (if returned)
                     String responseBody = response.body() != null ? response.body().string() : null;
                     if (responseBody != null && !responseBody.isEmpty()) {
                         try {
@@ -300,7 +233,6 @@ public class BingoScreenshotManager {
                                 log.debug("Screenshot uploaded to: {}", url);
                             }
                         } catch (Exception e) {
-                            // Ignore parsing errors for response
                         }
                     }
                 } else {
@@ -313,9 +245,6 @@ public class BingoScreenshotManager {
         }
     }
 
-    /**
-     * Queues a screenshot for later upload attempt.
-     */
     private void queuePendingScreenshot(BufferedImage image, int boardId, int tileId, int itemId,
             String itemName, String playerName, int world) {
         try {
@@ -323,7 +252,6 @@ public class BingoScreenshotManager {
             pendingScreenshots.add(new PendingScreenshot(
                     imageBytes, boardId, tileId, itemId, itemName, playerName, world));
 
-            // Limit queue size
             while (pendingScreenshots.size() > 10) {
                 pendingScreenshots.poll();
             }
@@ -332,9 +260,6 @@ public class BingoScreenshotManager {
         }
     }
 
-    /**
-     * Retries uploading any pending screenshots.
-     */
     public void retryPendingScreenshots() {
         if (!started.get() || uploadExecutor == null) {
             return;
@@ -359,7 +284,6 @@ public class BingoScreenshotManager {
                             uploadSemaphore.release();
                         }
                     } else {
-                        // Re-queue if still rate limited
                         pendingScreenshots.add(screenshot);
                     }
                 } catch (InterruptedException e) {
@@ -369,12 +293,6 @@ public class BingoScreenshotManager {
         }
     }
 
-    /**
-     * Converts a screenshot to base64 for embedding in API requests.
-     *
-     * @param image the image to convert
-     * @return base64-encoded JPEG string
-     */
     public String toBase64(BufferedImage image) {
         try {
             BufferedImage processed = resizeIfNecessary(image);
@@ -386,9 +304,6 @@ public class BingoScreenshotManager {
         }
     }
 
-    /**
-     * Internal class for pending screenshot data.
-     */
     private static class PendingScreenshot {
         final byte[] imageBytes;
         final int boardId;
