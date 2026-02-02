@@ -1,6 +1,8 @@
 package gg.embargo;
 
 import com.google.inject.Provides;
+import gg.embargo.bingo.BingoManager;
+import gg.embargo.bingo.BingoScreenshotManager;
 import gg.embargo.collections.*;
 import gg.embargo.commands.CommandManager;
 import gg.embargo.eastereggs.NPCRenameManager;
@@ -95,6 +97,12 @@ public class EmbargoPlugin extends Plugin {
 	@Inject
 	public CommandManager commandManager;
 
+	@Inject
+	private BingoManager bingoManager;
+
+	@Inject
+	private BingoScreenshotManager bingoScreenshotManager;
+
 	private RuneScapeProfileType lastProfile;
 
 	private NavigationButton navButton;
@@ -171,6 +179,10 @@ public class EmbargoPlugin extends Plugin {
 			itemRenameManager.startUp();
 			npcRenameManager.startUp();
 		}
+
+		// Initialize bingo tracking
+		bingoManager.startUp();
+		bingoScreenshotManager.startUp();
 	}
 
 	@Inject
@@ -203,6 +215,8 @@ public class EmbargoPlugin extends Plugin {
 		itemRenameManager.shutDown();
 		npcRenameManager.shutDown();
 		commandManager.shutDown();
+		bingoManager.shutDown();
+		bingoScreenshotManager.shutDown();
 	}
 
 	@Subscribe
@@ -460,6 +474,14 @@ public class EmbargoPlugin extends Plugin {
 			} else {
 				itemRenameManager.shutDown();
 				npcRenameManager.shutDown();
+			}
+		}
+
+		// Handle bingo tracking config change
+		if (event.getKey().equals("enableBingoTracking")) {
+			if (!config.enableBingoTracking()) {
+				// Notify server that tracking was disabled
+				bingoManager.notifyTrackingDisabled();
 			}
 		}
 	}
