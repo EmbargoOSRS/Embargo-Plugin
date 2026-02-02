@@ -100,6 +100,7 @@ public class DataManager {
     private int[] oldVarps;
 
     private final HashMultimap<Integer, Integer> varpToVarbitMapping = HashMultimap.create();
+    private volatile boolean varpMappingReady = false;
 
     private final HashMap<Integer, Integer> varbData = new HashMap<>();
     private final HashMap<Integer, Integer> varpData = new HashMap<>();
@@ -241,14 +242,11 @@ public class DataManager {
 
                     @Override
                     public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                        // Update what we want to track on the fly
-                        if (response.isSuccessful()) {
-                            log.debug("Successfully uploaded new collection log slot");
-                            response.close();
-                            return;
+                        try (response) {
+                            if (response.isSuccessful()) {
+                                log.debug("Successfully uploaded new collection log slot");
+                            }
                         }
-
-                        response.close();
                     }
                 });
     }
@@ -268,11 +266,11 @@ public class DataManager {
 
                     @Override
                     public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                        if (response.isSuccessful()) {
-                            log.debug("Successfully uploaded raid preparation");
+                        try (response) {
+                            if (response.isSuccessful()) {
+                                log.debug("Successfully uploaded raid preparation");
+                            }
                         }
-
-                        response.close();
                     }
                 });
     }
@@ -292,11 +290,11 @@ public class DataManager {
 
                     @Override
                     public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                        if (response.isSuccessful()) {
-                            log.debug("Successfully uploaded minigame preparation");
+                        try (response) {
+                            if (response.isSuccessful()) {
+                                log.debug("Successfully uploaded minigame preparation");
+                            }
                         }
-
-                        response.close();
                     }
                 });
     }
@@ -511,12 +509,17 @@ public class DataManager {
 
                         } else {
                             String responseBody = response.body().string();
-                            JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
-                            if (jsonResponse != null && jsonResponse.has("message")
-                                    && "not registered".equals(jsonResponse.get("message").getAsString())) {
-                                stopTryingForAccount.set(true);
-                                callback.accept(false);
-                                return;
+                            try {
+                                JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
+                                if (jsonResponse != null && jsonResponse.has("message")
+                                        && "not registered".equals(jsonResponse.get("message").getAsString())) {
+                                    stopTryingForAccount.set(true);
+                                    callback.accept(false);
+                                    return;
+                                }
+                            } catch (Exception e) {
+                                // Response is not valid JSON (e.g., 502 error page)
+                                log.debug("Non-JSON error response: {}", response.code());
                             }
                             log.error("Failed to check if {} is registered with Embargo's database. Status: {}",
                                     username, response.code());
@@ -559,12 +562,13 @@ public class DataManager {
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    log.debug("Loot uploaded successfully");
-                } else {
-                    log.error("Loot upload failed with status " + response.code());
+                try (response) {
+                    if (response.isSuccessful()) {
+                        log.debug("Loot uploaded successfully");
+                    } else {
+                        log.error("Loot upload failed with status " + response.code());
+                    }
                 }
-                response.close();
             }
         });
     }
@@ -742,16 +746,13 @@ public class DataManager {
 
                             @Override
                             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                                if (response.isSuccessful()) {
-                                    log.debug("Successfully uploaded untrackable items");
-                                    response.close();
-                                    return;
-                                } else {
-                                    response.close();
-                                    log.error("submitToAPI onResponse returned, but without success");
+                                try (response) {
+                                    if (response.isSuccessful()) {
+                                        log.debug("Successfully uploaded untrackable items");
+                                    } else {
+                                        log.error("submitToAPI onResponse returned, but without success");
+                                    }
                                 }
-
-                                response.close();
                             }
                         });
             } catch (Exception e) {
@@ -798,18 +799,15 @@ public class DataManager {
 
                 @Override
                 public void onResponse(@NonNull Call call, @NonNull Response response) {
-                    if (response.isSuccessful()) {
-                        try {
-                            // We want to be able to change the varbs and varps we get on the fly. To do so,
-                            // we tell
-                            // the client what to send the server on startup via the manifest.
+                    try (response) {
+                        if (response.isSuccessful()) {
                             if (response.body() == null) {
                                 log.error("Manifest request succeeded but returned empty body");
-                                response.close();
+                                return;
                             }
 
-                            JsonObject j = gson.fromJson(response.body().string(), JsonObject.class);
                             try {
+                                JsonObject j = gson.fromJson(response.body().string(), JsonObject.class);
                                 setVarbitsToCheck(parseSet(j.getAsJsonArray("varbits")));
                                 setVarpsToCheck(parseSet(j.getAsJsonArray("varps")));
                                 try {
@@ -827,21 +825,18 @@ public class DataManager {
                             } catch (ClassCastException e) {
                                 log.error("Manifest from /manifest call might have varbits or varps as not a list");
                                 log.error(e.getLocalizedMessage());
+                            } catch (IOException | JsonSyntaxException e) {
+                                log.error(e.getLocalizedMessage());
                             }
-                        } catch (IOException | JsonSyntaxException e) {
-                            log.error(e.getLocalizedMessage());
-                        } finally {
-                            response.close();
-                        }
-                    } else {
-                        log.error("Manifest request returned with status " + response.code());
-                        if (response.body() == null) {
-                            log.error("Manifest request returned empty body");
                         } else {
-                            log.error(response.body().toString());
+                            log.error("Manifest request returned with status " + response.code());
+                            if (response.body() == null) {
+                                log.error("Manifest request returned empty body");
+                            } else {
+                                log.error(response.body().toString());
+                            }
                         }
                     }
-                    response.close();
                 }
             });
         } catch (IllegalArgumentException e) {
@@ -865,19 +860,15 @@ public class DataManager {
 
                 @Override
                 public void onResponse(@NonNull Call call, Response response) throws IOException {
-                    if (response.isSuccessful()) {
-                        try {
-                            // We want to be able to change the varbs and varps we get on the fly. To do so,
-                            // we tell
-                            // the client what to send the server on startup via the manifest.
+                    try (response) {
+                        if (response.isSuccessful()) {
                             if (response.body() == null) {
                                 log.error("Manifest request succeeded but returned empty body");
-                                response.close();
+                                return;
                             }
 
-                            JsonObject j = gson.fromJson(response.body().string(), JsonObject.class);
-
                             try {
+                                JsonObject j = gson.fromJson(response.body().string(), JsonObject.class);
                                 try {
                                     int manifestVersion = j.get("version").getAsInt();
                                     if (manifestManager.getLatestManifest().getVersion() != manifestVersion) {
@@ -889,21 +880,18 @@ public class DataManager {
                                 }
                             } catch (NullPointerException | ClassCastException e) {
                                 log.error(e.getLocalizedMessage());
+                            } catch (IOException | JsonSyntaxException e) {
+                                log.error(e.getLocalizedMessage());
                             }
-                        } catch (IOException | JsonSyntaxException e) {
-                            log.error(e.getLocalizedMessage());
-                        } finally {
-                            response.close();
-                        }
-                    } else {
-                        log.error("Manifest request returned with status " + response.code());
-                        if (response.body() == null) {
-                            log.error("Manifest request returned empty body");
                         } else {
-                            log.error(response.body().toString());
+                            log.error("Manifest request returned with status " + response.code());
+                            if (response.body() == null) {
+                                log.error("Manifest request returned empty body");
+                            } else {
+                                log.error(response.body().toString());
+                            }
                         }
                     }
-                    response.close();
                 }
             });
         } catch (IllegalArgumentException e) {
@@ -923,14 +911,16 @@ public class DataManager {
         if (varpsToCheck.contains(varpIndexChanged)) {
             storeVarpChanged(varpIndexChanged, client.getVarpValue(varpIndexChanged));
         }
-        for (Integer i : varpToVarbitMapping.get(varpIndexChanged)) {
-            if (!varbitsToCheck.contains(i))
-                continue;
-            // For each varbit index, see if it changed.
-            int oldValue = client.getVarbitValue(oldVarps, i);
-            int newValue = client.getVarbitValue(i);
-            if (oldValue != newValue)
-                storeVarbitChanged(i, newValue);
+        if (varpMappingReady) {
+            for (Integer i : varpToVarbitMapping.get(varpIndexChanged)) {
+                if (!varbitsToCheck.contains(i))
+                    continue;
+                // For each varbit index, see if it changed.
+                int oldValue = client.getVarbitValue(oldVarps, i);
+                int newValue = client.getVarbitValue(i);
+                if (oldValue != newValue)
+                    storeVarbitChanged(i, newValue);
+            }
         }
         oldVarps[varpIndexChanged] = client.getVarpValue(varpIndexChanged);
     }
@@ -943,6 +933,7 @@ public class DataManager {
     private void setupVarpTracking() {
         final int VARBITS_ARCHIVE_ID = 14;
         // Init stuff to keep track of varb changes
+        varpMappingReady = false;
         varpToVarbitMapping.clear();
 
         if (oldVarps == null) {
@@ -964,6 +955,16 @@ public class DataManager {
                 VarbitComposition varbit = client.getVarbit(id);
                 if (varbit != null) {
                     varpToVarbitMapping.put(varbit.getIndex(), id);
+                }
+            }
+            varpMappingReady = true;
+            // Capture initial values for all tracked varbits
+            if (varbitsToCheck != null) {
+                for (Integer varbitId : varbitsToCheck) {
+                    int value = client.getVarbitValue(varbitId);
+                    if (value != 0) {
+                        storeVarbitChanged(varbitId, value);
+                    }
                 }
             }
             return true;

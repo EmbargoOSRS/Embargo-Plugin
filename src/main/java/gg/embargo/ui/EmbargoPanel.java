@@ -6,8 +6,17 @@ import com.google.gson.JsonObject;
 import gg.embargo.DataManager;
 import gg.embargo.EmbargoConfig;
 import gg.embargo.EmbargoPlugin;
+import gg.embargo.bingo.BingoManager;
+import gg.embargo.bingo.BingoState;
+import gg.embargo.bingo.BingoTeam;
+import gg.embargo.bingo.BingoTile;
+import gg.embargo.bingo.BingoTileType;
+import gg.embargo.bingo.BingoTileStatus;
+import gg.embargo.bingo.BingoItemGroup;
+import gg.embargo.bingo.BingoTeamTileProgress;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.client.callback.ClientThread;
@@ -18,6 +27,12 @@ import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
+
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
@@ -31,12 +46,22 @@ import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.awt.image.BufferedImage;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Semaphore;
+import java.util.function.Consumer;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import javax.imageio.ImageIO;
 
 @Slf4j
 public class EmbargoPanel extends PluginPanel {
@@ -60,6 +85,12 @@ public class EmbargoPanel extends PluginPanel {
 
     @Inject
     private EmbargoConfig config;
+
+    @Inject
+    private BingoManager bingoManager;
+
+    @Inject
+    private OkHttpClient okHttpClient;
 
     @Setter
     public boolean isLoggedIn = false;
@@ -115,6 +146,13 @@ public class EmbargoPanel extends PluginPanel {
     // Of The Week event alerts
     private final Set<Integer> alertedEventIds = new HashSet<>();
 
+    // Bingo subsection
+    private JPanel bingoPanel;
+    private final Set<Integer> alertedBingoIds = new HashSet<>();
+
+    // Stored reference to allow removal on shutdown
+    private Consumer<List<BingoState>> bingoStateChangeListener;
+
     // Periodic refresh for events/bounties/polls
     private static final int EVENTS_REFRESH_INTERVAL_MINUTES = 1;
     private ScheduledFuture<?> eventsRefreshTask;
@@ -128,6 +166,12 @@ public class EmbargoPanel extends PluginPanel {
                 + "</span></body></html>";
     }
 
+    private String getEmbargoTag() {
+        java.awt.Color color = config.embargoMessageColor();
+        String hex = String.format("%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue());
+        return "<col=" + hex + ">[Embargo]</col>";
+    }
+
     /**
      * Creates a styled label with smallFont, light gray color, and left alignment
      */
@@ -136,6 +180,7 @@ public class EmbargoPanel extends PluginPanel {
         label.setFont(smallFont);
         label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        label.setHorizontalAlignment(SwingConstants.LEFT);
         return label;
     }
 
@@ -147,6 +192,7 @@ public class EmbargoPanel extends PluginPanel {
         label.setFont(smallFont);
         label.setForeground(color);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        label.setHorizontalAlignment(SwingConstants.LEFT);
         return label;
     }
 
@@ -179,10 +225,36 @@ public class EmbargoPanel extends PluginPanel {
     private void makeClickable(JLabel label, String url, String tooltip) {
         label.setCursor(new Cursor(Cursor.HAND_CURSOR));
         label.setToolTipText(tooltip);
+
+        // Use a light blue color for links to indicate clickability
+        final Color linkColor = new Color(0x5D, 0x9C, 0xEC);
+
+        // Only apply link color to non-HTML labels (HTML labels have their own styling)
+        String text = label.getText();
+        boolean isHtml = text != null && text.toLowerCase().startsWith("<html>");
+        if (!isHtml) {
+            label.setForeground(linkColor);
+        }
+
+        // Use label's foreground color for underline, or link color for HTML labels
+        final Color underlineColor = isHtml ? Color.WHITE : linkColor;
+
         label.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
                 LinkBrowser.browse(url);
+            }
+
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                // Add underline border on hover
+                label.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, underlineColor));
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                // Remove underline border
+                label.setBorder(null);
             }
         });
     }
@@ -212,6 +284,7 @@ public class EmbargoPanel extends PluginPanel {
         label.setFont(smallFont);
         label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        label.setHorizontalAlignment(SwingConstants.LEFT);
     }
 
     void setupVersionPanel() {
@@ -221,7 +294,7 @@ public class EmbargoPanel extends PluginPanel {
         versionPanel.setLayout(new BoxLayout(versionPanel, BoxLayout.Y_AXIS));
 
         // Set up Embargo Clan Version at top of Version panel
-        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.0"));
+        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.1"));
         version.setFont(smallFont);
         version.setAlignmentX(Component.LEFT_ALIGNMENT);
 
@@ -446,10 +519,21 @@ public class EmbargoPanel extends PluginPanel {
         pollsPanel.add(createSmallLabel("Loading..."));
         eventsContainer.add(pollsPanel);
 
-        // Fetch events, bounties, and polls
+        eventsContainer.add(Box.createVerticalStrut(8));
+
+        // === Bingo Subsection ===
+        eventsContainer.add(createHeader("Bingo", false));
+        eventsContainer.add(Box.createVerticalStrut(4));
+
+        bingoPanel = createVerticalPanel();
+        bingoPanel.add(createSmallLabel("Loading..."));
+        eventsContainer.add(bingoPanel);
+
+        // Stagger API calls to avoid network burst on panel init
         fetchAndUpdateEvents();
-        fetchAndUpdateBounties();
-        fetchAndUpdatePoll();
+        executorService.schedule(this::fetchAndUpdateBounties, 100, TimeUnit.MILLISECONDS);
+        executorService.schedule(this::fetchAndUpdatePoll, 200, TimeUnit.MILLISECONDS);
+        executorService.schedule(this::fetchAndUpdateBingo, 300, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -465,6 +549,23 @@ public class EmbargoPanel extends PluginPanel {
 
     private static final Color COLOR_GREEN = new Color(0x00, 0xc8, 0x00);
     private static final Color COLOR_ORANGE = new Color(0xff, 0xc0, 0x00);
+    private static final Color COLOR_YELLOW = new Color(0xff, 0xff, 0x00);
+    private static final Color COLOR_GRAY = new Color(0x99, 0x99, 0x99);
+
+    // Static cache for bingo tile images (persists across panel refreshes)
+    // Use bounded LRU cache to prevent unbounded memory growth
+    private static final int MAX_TILE_IMAGE_CACHE_SIZE = 100;
+    private static final Map<String, ImageIcon> TILE_IMAGE_CACHE = Collections.synchronizedMap(
+            new LinkedHashMap<String, ImageIcon>(MAX_TILE_IMAGE_CACHE_SIZE, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, ImageIcon> eldest) {
+                    return size() > MAX_TILE_IMAGE_CACHE_SIZE;
+                }
+            });
+
+    // Limit concurrent tile image loads to prevent flooding network on panel load
+    private static final int MAX_CONCURRENT_IMAGE_LOADS = 3;
+    private static final Semaphore imageLoadSemaphore = new Semaphore(MAX_CONCURRENT_IMAGE_LOADS);
 
     /**
      * Updates the Of The Week panel with the API response
@@ -482,8 +583,8 @@ public class EmbargoPanel extends PluginPanel {
         }
 
         // Separate ongoing and upcoming events
-        java.util.List<JsonObject> ongoingEvents = new ArrayList<>();
-        java.util.List<JsonObject> upcomingEvents = new ArrayList<>();
+        List<JsonObject> ongoingEvents = new ArrayList<>();
+        List<JsonObject> upcomingEvents = new ArrayList<>();
 
         for (JsonElement element : events) {
             JsonObject event = element.getAsJsonObject();
@@ -601,8 +702,8 @@ public class EmbargoPanel extends PluginPanel {
         }
 
         JsonArray bounties = response.getAsJsonArray("bounties");
-        java.util.List<JsonObject> activeBounties = new ArrayList<>();
-        java.util.List<JsonObject> recentBounties = new ArrayList<>();
+        List<JsonObject> activeBounties = new ArrayList<>();
+        List<JsonObject> recentBounties = new ArrayList<>();
 
         // Separate active and completed bounties
         for (JsonElement element : bounties) {
@@ -711,9 +812,9 @@ public class EmbargoPanel extends PluginPanel {
 
         clientThread.invokeLater(() -> {
             client.addChatMessage(
-                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> Active bounty: <col=ffffff>" + target
+                    getEmbargoTag() + " Active bounty: <col=ffffff>" + target
                             + "</col>! Check the side panel for details.",
                     null);
         });
@@ -726,6 +827,7 @@ public class EmbargoPanel extends PluginPanel {
         alertedBountyIds.clear();
         alertedPollIds.clear();
         alertedEventIds.clear();
+        alertedBingoIds.clear();
     }
 
     /**
@@ -738,10 +840,12 @@ public class EmbargoPanel extends PluginPanel {
 
         eventsRefreshTask = executorService.scheduleAtFixedRate(() -> {
             if (isLoggedIn) {
-                log.debug("Periodic refresh: fetching events, bounties, and polls");
+                log.debug("Periodic refresh: fetching events, bounties, polls, and bingo");
+                // Stagger API calls to avoid network burst
                 fetchAndUpdateEvents();
-                fetchAndUpdateBounties();
-                fetchAndUpdatePoll();
+                executorService.schedule(this::fetchAndUpdateBounties, 100, TimeUnit.MILLISECONDS);
+                executorService.schedule(this::fetchAndUpdatePoll, 200, TimeUnit.MILLISECONDS);
+                executorService.schedule(this::fetchAndUpdateBingo, 300, TimeUnit.MILLISECONDS);
             }
         }, EVENTS_REFRESH_INTERVAL_MINUTES, EVENTS_REFRESH_INTERVAL_MINUTES, TimeUnit.MINUTES);
     }
@@ -836,12 +940,449 @@ public class EmbargoPanel extends PluginPanel {
 
         clientThread.invokeLater(() -> {
             client.addChatMessage(
-                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> New poll: <col=ffffff>" + title
+                    getEmbargoTag() + " New poll: <col=ffffff>" + title
                             + "</col>! Check the side panel or Discord to vote.",
                     null);
         });
+    }
+
+    /**
+     * Fetches bingo state and updates the panel
+     */
+    private void fetchAndUpdateBingo() {
+        if (!config.enableBingo()) {
+            SwingUtilities.invokeLater(this::updateBingoPanel);
+            return;
+        }
+        // Trigger a refresh of bingo state, then update the UI
+        bingoManager.refreshBingoState();
+        // Update UI after a short delay to allow async fetch to complete
+        executorService.schedule(() -> SwingUtilities.invokeLater(this::updateBingoPanel), 500, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Updates the bingo panel with the current bingo states
+     */
+    private void updateBingoPanel() {
+        bingoPanel.removeAll();
+
+        // Check if bingo is disabled via config
+        if (!config.enableBingo()) {
+            bingoPanel.add(createSmallLabel("Bingo disabled"));
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
+            return;
+        }
+
+        List<BingoState> states = bingoManager.getCurrentStates();
+
+        if (states == null || states.isEmpty()) {
+            bingoPanel.add(createSmallLabel("No active bingo"));
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
+            return;
+        }
+
+        // Filter to only active bingos
+        List<BingoState> activeStates = states.stream()
+                .filter(BingoState::isActive)
+                .collect(Collectors.toList());
+
+        if (activeStates.isEmpty()) {
+            bingoPanel.add(createSmallLabel("No active bingo"));
+            eventsContainer.revalidate();
+            eventsContainer.repaint();
+            return;
+        }
+
+        // Display each active bingo
+        boolean firstBingo = true;
+        for (BingoState state : activeStates) {
+            if (!firstBingo) {
+                bingoPanel.add(Box.createVerticalStrut(8));
+                bingoPanel.add(new JSeparator());
+                bingoPanel.add(Box.createVerticalStrut(4));
+            }
+            firstBingo = false;
+
+            addBingoStateToPanel(state);
+        }
+
+        eventsContainer.revalidate();
+        eventsContainer.repaint();
+    }
+
+    /**
+     * Adds a single bingo state's information to the bingo panel
+     */
+    private void addBingoStateToPanel(BingoState state) {
+        // Show bingo name and status
+        String bingoName = state.getName();
+        int bingoId = state.getId();
+
+        // Alert user if this is a new bingo they haven't been alerted about
+        if (isLoggedIn && !alertedBingoIds.contains(bingoId)) {
+            alertedBingoIds.add(bingoId);
+            // BingoManager handles alerts, so we don't need to send one here
+        }
+
+        // Bingo name with status - "Event Name - Active"
+        JLabel nameLabel = new JLabel("<html><body style='color:white'>" + bingoName +
+                " - <span style='color:#00ff00'>Active</span></body></html>");
+        nameLabel.setFont(smallFont);
+        nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        nameLabel.setHorizontalAlignment(SwingConstants.LEFT);
+        makeClickable(nameLabel, "https://embargo.gg/bingo/" + bingoId, "Click to view on embargo.gg");
+        bingoPanel.add(nameLabel);
+
+        // Time remaining
+        String timeRemaining = state.getFormattedTimeRemaining();
+        JLabel timeLabel = new JLabel(htmlLabel("Ends in:", " " + timeRemaining));
+        styleLabel(timeLabel);
+        bingoPanel.add(timeLabel);
+
+        // Check if enrolled
+        if (state.isEnrolled()) {
+            BingoTeam team = state.getUserTeam();
+
+            bingoPanel.add(Box.createVerticalStrut(4));
+
+            // Team name
+            if (team != null) {
+                JLabel teamLabel = new JLabel(htmlLabel("Team:", " " + team.getName()));
+                styleLabel(teamLabel);
+                bingoPanel.add(teamLabel);
+
+                // Tiles completed
+                int completed = state.getCompletedTileCount();
+                int total = state.getTiles().size();
+                JLabel tilesLabel = new JLabel(htmlLabel("Tiles:", " " + completed + "/" + total));
+                styleLabel(tilesLabel);
+                bingoPanel.add(tilesLabel);
+
+                // Show visual bingo board grid
+                addBingoBoardGrid(state);
+
+                // Show in-progress tiles with group details
+                addInProgressTilesToPanel(state);
+            }
+        } else {
+            // Not enrolled
+            bingoPanel.add(Box.createVerticalStrut(4));
+            bingoPanel.add(createSmallLabel("Not enrolled", COLOR_ORANGE));
+            bingoPanel.add(createSmallLabel("Visit embargo.gg to join"));
+        }
+    }
+
+    /**
+     * Adds a visual bingo board grid showing tile completion statuses with icons
+     */
+    private void addBingoBoardGrid(BingoState state) {
+        int boardSize = state.getSize();
+        int totalTiles = boardSize * boardSize;
+
+        bingoPanel.add(Box.createVerticalStrut(8));
+
+        // Create grid panel
+        JPanel gridPanel = new JPanel(new GridLayout(boardSize, boardSize, 2, 2));
+        gridPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        gridPanel.setBorder(new EmptyBorder(2, 2, 2, 2));
+        gridPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        // Get tiles sorted by position
+        List<BingoTile> sortedTiles = state.getTilesByPosition();
+
+        // Calculate tile size based on panel width (aim for ~180px total width)
+        int tileSize = Math.max(28, (180 - (boardSize + 1) * 2) / boardSize);
+        int iconSize = tileSize - 6; // Leave room for border
+
+        // Set grid size constraints
+        int gridWidth = boardSize * tileSize + (boardSize + 1) * 2;
+        int gridHeight = boardSize * tileSize + (boardSize + 1) * 2;
+        gridPanel.setPreferredSize(new Dimension(gridWidth, gridHeight));
+        gridPanel.setMaximumSize(new Dimension(gridWidth, gridHeight));
+
+        for (int i = 0; i < totalTiles; i++) {
+            // Find tile at this position
+            BingoTile tile = null;
+            for (BingoTile t : sortedTiles) {
+                if (t.getPosition() == i) {
+                    tile = t;
+                    break;
+                }
+            }
+
+            JPanel tilePanel = createBingoTileCell(tile, state, tileSize, iconSize);
+            gridPanel.add(tilePanel);
+        }
+
+        bingoPanel.add(gridPanel);
+
+        // Add legend
+        bingoPanel.add(Box.createVerticalStrut(4));
+        JPanel legendPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        legendPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        legendPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        legendPanel.add(createLegendItem(new Color(0x22, 0x8B, 0x22), "Done"));
+        legendPanel.add(createLegendItem(new Color(0xDA, 0xA5, 0x20), "Partial"));
+        legendPanel.add(createLegendItem(new Color(0x3C, 0x3C, 0x3C), "Todo"));
+
+        bingoPanel.add(legendPanel);
+    }
+
+    /**
+     * Creates a single bingo tile cell with icon and status border
+     */
+    private JPanel createBingoTileCell(BingoTile tile, BingoState state, int tileSize, int iconSize) {
+        JPanel tilePanel = new JPanel(new BorderLayout());
+        tilePanel.setPreferredSize(new Dimension(tileSize, tileSize));
+
+        if (tile == null) {
+            tilePanel.setBackground(new Color(0x2A, 0x2A, 0x2A)); // Empty slot
+            return tilePanel;
+        }
+
+        BingoTeamTileProgress progress = state.getProgress(tile.getId());
+        BingoTileStatus status = progress != null ? progress.getStatus() : BingoTileStatus.PENDING;
+
+        // Set border color based on status
+        Color borderColor;
+        switch (status) {
+            case COMPLETED:
+                borderColor = new Color(0x22, 0x8B, 0x22); // Forest green
+                break;
+            case PARTIAL:
+                borderColor = new Color(0xDA, 0xA5, 0x20); // Goldenrod
+                break;
+            default:
+                borderColor = new Color(0x55, 0x55, 0x55); // Gray
+                break;
+        }
+
+        tilePanel.setBackground(new Color(0x1E, 0x1E, 0x1E));
+        tilePanel.setBorder(BorderFactory.createLineBorder(borderColor, 2));
+
+        // Add tooltip with tile name
+        String tooltipText = tile.getTitle();
+        if (tooltipText != null && !tooltipText.isEmpty()) {
+            if (progress != null && status == BingoTileStatus.PARTIAL) {
+                tooltipText += " (" + progress.getCurrentCount() + "/" + tile.getRequiredCount() + ")";
+            }
+            tilePanel.setToolTipText(tooltipText);
+        }
+
+        // Try to load and display image
+        String imageUrl = tile.getImageUrl();
+        if (imageUrl != null && !imageUrl.isEmpty()) {
+            loadTileImage(tilePanel, imageUrl, iconSize);
+        }
+
+        return tilePanel;
+    }
+
+    /**
+     * Loads a tile image and adds it to the panel. Uses cache for speed.
+     */
+    private void loadTileImage(JPanel tilePanel, String imageUrl, int iconSize) {
+        // Create cache key with size for proper scaling
+        String cacheKey = imageUrl + "@" + iconSize;
+
+        // Check cache first (on current thread for instant display)
+        ImageIcon cachedIcon = TILE_IMAGE_CACHE.get(cacheKey);
+        if (cachedIcon != null) {
+            JLabel iconLabel = new JLabel(cachedIcon);
+            iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
+            tilePanel.add(iconLabel, BorderLayout.CENTER);
+            return;
+        }
+
+        // Rate-limit concurrent image loads to prevent stuttering on panel load
+        if (!imageLoadSemaphore.tryAcquire()) {
+            // Queue the load for later if too many concurrent loads
+            executorService.execute(() -> {
+                try {
+                    imageLoadSemaphore.acquire();
+                    loadTileImageInternal(tilePanel, imageUrl, iconSize, cacheKey);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            return;
+        }
+
+        loadTileImageInternal(tilePanel, imageUrl, iconSize, cacheKey);
+    }
+
+    private void loadTileImageInternal(JPanel tilePanel, String imageUrl, int iconSize, String cacheKey) {
+        Request request = new Request.Builder()
+                .url(imageUrl)
+                .build();
+
+        okHttpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                imageLoadSemaphore.release();
+                log.debug("Failed to load bingo tile image: {}", imageUrl);
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    if (!response.isSuccessful() || response.body() == null) {
+                        return;
+                    }
+
+                    BufferedImage originalImage = ImageIO.read(response.body().byteStream());
+
+                    if (originalImage != null) {
+                        // Scale image using faster method
+                        Image scaledImage = originalImage.getScaledInstance(
+                                iconSize, iconSize, Image.SCALE_SMOOTH);
+
+                        // Convert to BufferedImage for better performance
+                        BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
+                        Graphics2D g2d = bufferedScaled.createGraphics();
+                        g2d.drawImage(scaledImage, 0, 0, null);
+                        g2d.dispose();
+
+                        ImageIcon scaledIcon = new ImageIcon(bufferedScaled);
+
+                        // Cache the scaled icon
+                        TILE_IMAGE_CACHE.put(cacheKey, scaledIcon);
+
+                        SwingUtilities.invokeLater(() -> {
+                            JLabel iconLabel = new JLabel(scaledIcon);
+                            iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
+                            tilePanel.add(iconLabel, BorderLayout.CENTER);
+                            tilePanel.revalidate();
+                            tilePanel.repaint();
+                        });
+                    }
+                } catch (Exception e) {
+                    log.debug("Failed to process bingo tile image: {}", imageUrl);
+                } finally {
+                    imageLoadSemaphore.release();
+                }
+            }
+        });
+    }
+
+    /**
+     * Creates a small legend item with a colored square and label
+     */
+    private JPanel createLegendItem(Color color, String text) {
+        JPanel item = new JPanel();
+        item.setLayout(new BoxLayout(item, BoxLayout.X_AXIS));
+        item.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+        JPanel colorBox = new JPanel();
+        colorBox.setPreferredSize(new Dimension(8, 8));
+        colorBox.setMaximumSize(new Dimension(8, 8));
+        colorBox.setMinimumSize(new Dimension(8, 8));
+        colorBox.setBackground(color);
+        item.add(colorBox);
+
+        item.add(Box.createHorizontalStrut(3));
+
+        JLabel label = new JLabel(text);
+        label.setFont(FontManager.getRunescapeSmallFont());
+        label.setForeground(Color.LIGHT_GRAY);
+        item.add(label);
+
+        return item;
+    }
+
+    /**
+     * Adds in-progress tiles with their group details to the bingo panel
+     */
+    private void addInProgressTilesToPanel(BingoState state) {
+        // Get tiles that are partial (in progress)
+        List<BingoTile> partialTiles = new ArrayList<>();
+        for (BingoTile tile : state.getTiles().values()) {
+            BingoTeamTileProgress progress = state.getProgress(tile.getId());
+            if (progress != null && progress.getStatus() == BingoTileStatus.PARTIAL) {
+                partialTiles.add(tile);
+            }
+        }
+
+        if (partialTiles.isEmpty()) {
+            return;
+        }
+
+        bingoPanel.add(Box.createVerticalStrut(8));
+        bingoPanel.add(createSmallLabel("In Progress:", Color.WHITE));
+        bingoPanel.add(Box.createVerticalStrut(2));
+
+        // Show up to 5 partial tiles
+        int shown = 0;
+        for (BingoTile tile : partialTiles) {
+            if (shown >= 5) {
+                int remaining = partialTiles.size() - 5;
+                bingoPanel.add(createSmallLabel("  +" + remaining + " more...", COLOR_GRAY));
+                break;
+            }
+
+            BingoTeamTileProgress progress = state.getProgress(tile.getId());
+            String tileTitle = tile.getTitle();
+            if (tileTitle.length() > 20) {
+                tileTitle = tileTitle.substring(0, 17) + "...";
+            }
+
+            // For grouped tiles, show group progress
+            if (tile.getTileType() == BingoTileType.GROUPED && !tile.getItemGroups().isEmpty()) {
+                bingoPanel.add(createSmallLabel("  " + tileTitle, COLOR_YELLOW));
+                for (BingoItemGroup group : tile.getItemGroups()) {
+                    // Calculate group progress based on progress entries
+                    int groupProgress = calculateGroupProgress(state, tile, group, progress);
+                    int required = group.getRequiredCount();
+                    String groupName = group.getGroupName();
+                    if (groupName.length() > 15) {
+                        groupName = groupName.substring(0, 12) + "...";
+                    }
+                    Color progressColor = groupProgress >= required ? COLOR_GREEN : COLOR_ORANGE;
+                    bingoPanel.add(createSmallLabel("    " + groupName + ": " + groupProgress + "/" + required, progressColor));
+                }
+            } else {
+                // For quantity tiles, show count
+                int current = progress != null ? progress.getCurrentCount() : 0;
+                int required = tile.getRequiredCount();
+                String progressText = "  " + tileTitle + " (" + current + "/" + required + ")";
+                bingoPanel.add(createSmallLabel(progressText, COLOR_YELLOW));
+            }
+
+            shown++;
+        }
+    }
+
+    /**
+     * Calculates progress for a specific group within a grouped tile.
+     * This is a simplified calculation based on the current count and items in the group.
+     */
+    private int calculateGroupProgress(BingoState state, BingoTile tile, BingoItemGroup group, BingoTeamTileProgress progress) {
+        // If we have detailed progress entries, we could count items per group
+        // For now, return a rough estimate based on the items in the group
+        // This would need enhancement if we want accurate per-group tracking
+        if (progress == null) {
+            return 0;
+        }
+
+        // For accurate group progress, we'd need the server to return per-group counts
+        // For now, show the overall progress divided proportionally
+        int totalItems = 0;
+        for (BingoItemGroup g : tile.getItemGroups()) {
+            totalItems += g.getRequiredCount();
+        }
+
+        if (totalItems == 0) {
+            return 0;
+        }
+
+        // Proportional estimate (not perfectly accurate but gives an indication)
+        int groupProportion = (progress.getCurrentCount() * group.getRequiredCount()) / totalItems;
+        return Math.min(groupProportion, group.getRequiredCount());
     }
 
     /**
@@ -866,9 +1407,9 @@ public class EmbargoPanel extends PluginPanel {
 
         clientThread.invokeLater(() -> {
             client.addChatMessage(
-                    net.runelite.api.ChatMessageType.GAMEMESSAGE,
+                    ChatMessageType.GAMEMESSAGE,
                     "",
-                    "<col=ff9000>[Embargo]</col> Active " + eventType + ": <col=ffffff>" + formattedMetric
+                    getEmbargoTag() + " Active " + eventType + ": <col=ffffff>" + formattedMetric
                             + "</col>. Check the side panel for details.",
                     null);
         });
@@ -973,9 +1514,10 @@ public class EmbargoPanel extends PluginPanel {
         missingRequirementsPanelX.clearItems();
         updateMissingItemCount(0);
 
-        // Refresh events (includes Of The Week and Bounties)
+        // Stagger API calls to avoid network burst on manual refresh
         fetchAndUpdateEvents();
-        fetchAndUpdateBounties();
+        executorService.schedule(this::fetchAndUpdateBounties, 100, TimeUnit.MILLISECONDS);
+        executorService.schedule(this::fetchAndUpdateBingo, 200, TimeUnit.MILLISECONDS);
 
         // Force refresh by calling updateLoggedIn with scheduled=true
         updateLoggedIn(true);
@@ -1041,6 +1583,11 @@ public class EmbargoPanel extends PluginPanel {
     public void init() {
         this.setupSidePanel();
         logOut();
+
+        // Register listener for bingo state changes to update UI
+        // Store the listener so we can remove it on shutdown
+        bingoStateChangeListener = states -> SwingUtilities.invokeLater(this::updateBingoPanel);
+        bingoManager.addStateChangeListener(bingoStateChangeListener);
     }
 
     public void updateLoggedIn(boolean scheduled) {
@@ -1083,10 +1630,12 @@ public class EmbargoPanel extends PluginPanel {
 
                 // Only show "Loading..." on first login
                 if (isFirstLogin) {
-                    // Refresh events (Of The Week and Bounties) on login
+                    // Stagger API calls to avoid network burst on login
+                    // Each call is delayed to prevent overwhelming the network
                     fetchAndUpdateEvents();
-                    fetchAndUpdateBounties();
-                    fetchAndUpdatePoll();
+                    executorService.schedule(this::fetchAndUpdateBounties, 100, TimeUnit.MILLISECONDS);
+                    executorService.schedule(this::fetchAndUpdatePoll, 200, TimeUnit.MILLISECONDS);
+                    executorService.schedule(this::fetchAndUpdateBingo, 300, TimeUnit.MILLISECONDS);
 
                     // Start periodic refresh for events/bounties/polls
                     startPeriodicEventsRefresh();
@@ -1101,141 +1650,146 @@ public class EmbargoPanel extends PluginPanel {
                 isRegisteredWithClanLabel.setText(htmlLabel("Account registered:", " Yes"));
 
                 // get gear asynchronously
-                dataManager.getProfileAsync(username, false).thenAccept(embargoProfileData -> {
-                    // This code runs when the profile data is received
-                    // We need to run UI updates on the client thread
-                    clientThread.invokeLater(() -> {
-                        // Check if profile data is valid before processing
-                        if (embargoProfileData == null) {
-                            return;
+                dataManager.getProfileAsync(username, false).thenAcceptAsync(embargoProfileData -> {
+                    // This code runs on a background thread - do all JSON parsing here
+                    if (embargoProfileData == null) {
+                        return;
+                    }
+
+                    // Parse all JSON data on background thread
+                    JsonElement currentAccountPoints = embargoProfileData.get("accountPoints");
+                    JsonElement currentCommunityPoints = embargoProfileData.get("communityPoints");
+
+                    final int accountPoints = (currentAccountPoints != null && !currentAccountPoints.isJsonNull())
+                            ? currentAccountPoints.getAsInt()
+                            : 0;
+                    final int communityPoints = (currentCommunityPoints != null && !currentCommunityPoints.isJsonNull())
+                            ? currentCommunityPoints.getAsInt()
+                            : 0;
+
+                    JsonElement getCurrentCAName = embargoProfileData.get("currentHighestCAName");
+                    JsonObject currentRank = embargoProfileData.getAsJsonObject("currentRank");
+
+                    final String currentRankDisplay;
+                    if (currentRank != null) {
+                        JsonElement currentRankName = currentRank.get("name");
+                        if (currentRankName != null && !currentRankName.isJsonNull()) {
+                            currentRankDisplay = currentRankName.getAsString();
+                        } else {
+                            currentRankDisplay = "N/A";
                         }
+                    } else {
+                        currentRankDisplay = "N/A";
+                    }
 
-                        JsonElement currentAccountPoints = embargoProfileData.get("accountPoints");
-                        JsonElement currentCommunityPoints = embargoProfileData.get("communityPoints");
+                    final String displayCAName;
+                    if (getCurrentCAName != null && !getCurrentCAName.isJsonNull()) {
+                        displayCAName = getCurrentCAName.getAsString().replace(" Combat Achievement", "");
+                    } else {
+                        displayCAName = "N/A";
+                    }
 
-                        // Parse points safely, defaulting to 0 if null
-                        int accountPoints = (currentAccountPoints != null && !currentAccountPoints.isJsonNull())
-                                ? currentAccountPoints.getAsInt()
-                                : 0;
-                        int communityPoints = (currentCommunityPoints != null && !currentCommunityPoints.isJsonNull())
-                                ? currentCommunityPoints.getAsInt()
-                                : 0;
+                    JsonArray missingGearReqs = embargoProfileData.getAsJsonArray("missingGearRequirements");
+                    JsonArray missingUntradableItemIdReqs = embargoProfileData
+                            .getAsJsonArray("missingUntradableItemIds");
 
+                    // Update simple labels on EDT (no game thread needed for Swing)
+                    SwingUtilities.invokeLater(() -> {
                         embargoScoreLabel.setText(htmlLabel("Embargo Score:", " " + (accountPoints + communityPoints)));
                         accountScoreLabel.setText(htmlLabel("Account Score:", " " + accountPoints));
                         communityScoreLabel.setText(htmlLabel("Community Score:", " " + communityPoints));
+                        currentRankLabel.setText(htmlLabel("Current Rank:", " " + currentRankDisplay));
+                        currentCALabel.setText(htmlLabel("Current CA Tier:", " " + displayCAName));
+                    });
 
-                        JsonElement getCurrentCAName = embargoProfileData.get("currentHighestCAName");
-                        JsonObject currentRank = embargoProfileData.getAsJsonObject("currentRank");
+                    ArrayList<String> alreadyProcessed = new ArrayList<>();
 
-                        String currentRankDisplay = "N/A";
-                        if (currentRank != null) {
-                            JsonElement currentRankName = currentRank.get("name");
-                            if (currentRankName != null && !currentRankName.isJsonNull()) {
-                                currentRankDisplay = currentRankName.getAsString();
+                    // Build out the missing requirements panel
+                    if (missingGearReqs.size() > 0 || missingUntradableItemIdReqs.size() > 0) {
+                        // Already on background thread, do item ID lookups here
+                        List<Object[]> dynamicItemsData = new ArrayList<>();
+                        List<Object[]> regularItemsData = new ArrayList<>();
+
+                        for (JsonElement mi : missingGearReqs) {
+                            String itemName = mi.getAsString();
+                            alreadyProcessed.add(itemName);
+                            log.debug("Processing {} in missingGearReqs", itemName);
+
+                            if (itemName.contains("|")) {
+                                // DynamicMissingItem: pre-resolve all item IDs
+                                String[] dynamicNames = itemName.split("\\|");
+                                int[] itemIds = new int[dynamicNames.length];
+                                for (int i = 0; i < dynamicNames.length; i++) {
+                                    itemIds[i] = missingRequirementsPanelX
+                                            .findItemIdByName(dynamicNames[i].trim());
+                                }
+                                dynamicItemsData.add(new Object[] { dynamicNames, itemIds });
+                            } else {
+                                // Regular item: pre-resolve item ID
+                                int itemId = missingRequirementsPanelX.findItemIdByName(itemName);
+                                regularItemsData.add(new Object[] { itemName, itemId });
                             }
                         }
-                        currentRankLabel.setText(htmlLabel("Current Rank:", " " + currentRankDisplay));
 
-                        String displayCAName = "N/A";
-                        if (getCurrentCAName != null && !getCurrentCAName.isJsonNull()) {
-                            displayCAName = getCurrentCAName.getAsString().replace(" Combat Achievement", "");
+                        List<Integer> untradableIds = new ArrayList<>();
+                        for (JsonElement mu : missingUntradableItemIdReqs) {
+                            if (alreadyProcessed.contains(mu.getAsString())) {
+                                log.debug("{} already added, skipping missingUntradableItemIdReqs",
+                                        mu.getAsString());
+                                continue;
+                            }
+                            untradableIds.add(mu.getAsInt());
                         }
-                        currentCALabel.setText(htmlLabel("Current CA Tier:", " " + displayCAName));
 
-                        JsonArray missingGearReqs = embargoProfileData.getAsJsonArray("missingGearRequirements");
-                        JsonArray missingUntradableItemIdReqs = embargoProfileData
-                                .getAsJsonArray("missingUntradableItemIds");
+                        // Use clientThread for item additions since they may load images via ItemManager
+                        clientThread.invokeLater(() -> {
+                            // Begin batching to prevent multiple panel rebuilds
+                            missingRequirementsPanelX.beginBatchUpdate();
 
-                        ArrayList<String> alreadyProcessed = new ArrayList<>();
-
-                        // Build out the missing requirements panel
-                        if (missingGearReqs.size() > 0 || missingUntradableItemIdReqs.size() > 0) {
-                            // Process items off the client thread to avoid blocking chunk loading
-                            // Use executorService to perform all item ID lookups asynchronously
-                            executorService.execute(() -> {
-                                // Pre-resolve all item IDs off the client thread (these are blocking calls)
-                                java.util.List<Object[]> dynamicItemsData = new ArrayList<>();
-                                java.util.List<Object[]> regularItemsData = new ArrayList<>();
-
-                                for (JsonElement mi : missingGearReqs) {
-                                    String itemName = mi.getAsString();
-                                    alreadyProcessed.add(itemName);
-                                    log.debug("Processing {} in missingGearReqs", itemName);
-
-                                    if (itemName.contains("|")) {
-                                        // DynamicMissingItem: pre-resolve all item IDs
-                                        String[] dynamicNames = itemName.split("\\|");
-                                        int[] itemIds = new int[dynamicNames.length];
-                                        for (int i = 0; i < dynamicNames.length; i++) {
-                                            itemIds[i] = missingRequirementsPanelX
-                                                    .findItemIdByName(dynamicNames[i].trim());
-                                        }
-                                        dynamicItemsData.add(new Object[] { dynamicNames, itemIds });
-                                    } else {
-                                        // Regular item: pre-resolve item ID
-                                        int itemId = missingRequirementsPanelX.findItemIdByName(itemName);
-                                        regularItemsData.add(new Object[] { itemName, itemId });
-                                    }
+                            try {
+                                // Add all dynamic items
+                                for (Object[] data : dynamicItemsData) {
+                                    String[] names = (String[]) data[0];
+                                    int[] ids = (int[]) data[1];
+                                    missingRequirementsPanelX.addDynamicMissingItem(names, ids, 3000);
                                 }
 
-                                java.util.List<Integer> untradableIds = new ArrayList<>();
-                                for (JsonElement mu : missingUntradableItemIdReqs) {
-                                    if (alreadyProcessed.contains(mu.getAsString())) {
-                                        log.debug("{} already added, skipping missingUntradableItemIdReqs",
-                                                mu.getAsString());
-                                        continue;
-                                    }
-                                    untradableIds.add(mu.getAsInt());
+                                // Add all regular items
+                                for (Object[] data : regularItemsData) {
+                                    String name = (String) data[0];
+                                    int id = (int) data[1];
+                                    missingRequirementsPanelX.addMissingItem(name, id);
                                 }
 
-                                // Now add all items on the client thread with batching enabled
-                                clientThread.invokeLater(() -> {
-                                    // Begin batching to prevent multiple panel rebuilds
-                                    missingRequirementsPanelX.beginBatchUpdate();
+                                // Add untradable items
+                                for (int itemId : untradableIds) {
+                                    missingRequirementsPanelX.addMissingItem("", itemId);
+                                }
+                            } finally {
+                                // End batching - this triggers a single panel rebuild
+                                missingRequirementsPanelX.endBatchUpdate();
+                            }
 
-                                    try {
-                                        // Add all dynamic items
-                                        for (Object[] data : dynamicItemsData) {
-                                            String[] names = (String[]) data[0];
-                                            int[] ids = (int[]) data[1];
-                                            missingRequirementsPanelX.addDynamicMissingItem(names, ids, 3000);
-                                        }
+                            // Update the container panel on EDT
+                            SwingUtilities.invokeLater(() -> {
+                                missingRequirementsPanel.removeAll();
+                                missingRequirementsPanel.add(missingRequirementsPanelX);
+                                missingRequirementsPanel.revalidate();
+                                missingRequirementsPanel.repaint();
 
-                                        // Add all regular items
-                                        for (Object[] data : regularItemsData) {
-                                            String name = (String) data[0];
-                                            int id = (int) data[1];
-                                            missingRequirementsPanelX.addMissingItem(name, id);
-                                        }
-
-                                        // Add untradable items
-                                        for (int itemId : untradableIds) {
-                                            missingRequirementsPanelX.addMissingItem("", itemId);
-                                        }
-                                    } finally {
-                                        // End batching - this triggers a single panel rebuild
-                                        missingRequirementsPanelX.endBatchUpdate();
-                                    }
-
-                                    // Update the container panel
-                                    missingRequirementsPanel.removeAll();
-                                    missingRequirementsPanel.add(missingRequirementsPanelX);
-                                    missingRequirementsPanel.revalidate();
-                                    missingRequirementsPanel.repaint();
-
-                                    // Update item count
-                                    int totalItems = dynamicItemsData.size() + regularItemsData.size()
-                                            + untradableIds.size();
-                                    updateMissingItemCount(totalItems);
-                                });
+                                // Update item count
+                                int totalItems = dynamicItemsData.size() + regularItemsData.size()
+                                        + untradableIds.size();
+                                updateMissingItemCount(totalItems);
                             });
-                        } else {
+                        });
+                    } else {
+                        SwingUtilities.invokeLater(() -> {
                             missingRequiredItemsLabel.setText(htmlLabel("Missing Requirements: ", "None"));
                             updateMissingItemCount(0);
-                        }
-                    });
-                }).exceptionally(ex -> {
+                        });
+                    }
+                }, executorService).exceptionally(ex -> {
                     log.error("Error fetching profile data", ex);
                     return null;
                 });
@@ -1312,6 +1866,13 @@ public class EmbargoPanel extends PluginPanel {
     public void reset() {
         stopPeriodicEventsRefresh();
         eventBus.unregister(this);
+
+        // Remove bingo state change listener to prevent memory leak
+        if (bingoStateChangeListener != null) {
+            bingoManager.removeStateChangeListener(bingoStateChangeListener);
+            bingoStateChangeListener = null;
+        }
+
         missingRequirementsPanelX.shutdown();
         this.updateLoggedIn(false);
     }
