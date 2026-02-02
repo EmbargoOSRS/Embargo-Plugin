@@ -80,15 +80,7 @@ public class BingoScreenshotManager {
         }
 
         if (uploadExecutor != null) {
-            uploadExecutor.shutdown();
-            try {
-                if (!uploadExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                    uploadExecutor.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                uploadExecutor.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
+            uploadExecutor.shutdownNow();
             uploadExecutor = null;
         }
 
