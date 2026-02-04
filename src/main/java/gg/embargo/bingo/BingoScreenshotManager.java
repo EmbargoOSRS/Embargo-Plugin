@@ -214,7 +214,7 @@ public class BingoScreenshotManager {
 
             try (Response response = okHttpClient.newCall(request).execute()) {
                 if (response.isSuccessful()) {
-                    log.info("Successfully uploaded bingo screenshot for tile {} ({})", tileId, itemName);
+                    log.debug("Successfully uploaded bingo screenshot for tile {} ({})", tileId, itemName);
 
                     String responseBody = response.body() != null ? response.body().string() : null;
                     if (responseBody != null && !responseBody.isEmpty()) {

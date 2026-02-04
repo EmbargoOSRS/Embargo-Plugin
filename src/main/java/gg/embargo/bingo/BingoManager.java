@@ -1,8 +1,11 @@
 
 package gg.embargo.bingo;
 
-import com.google.gson.*;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.reflect.TypeToken;
 import gg.embargo.EmbargoConfig;
+import gg.embargo.bingo.dto.*;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
@@ -114,7 +117,7 @@ public class BingoManager {
             return;
         }
 
-        log.info("Starting BingoManager");
+        log.debug("Starting BingoManager");
 
         executor = Executors.newScheduledThreadPool(2, r -> {
             Thread t = new Thread(r, "BingoManager");
@@ -146,7 +149,7 @@ public class BingoManager {
             return;
         }
 
-        log.info("Shutting down BingoManager");
+        log.debug("Shutting down BingoManager");
 
         trackingActive.set(false);
         eventBus.unregister(this);
@@ -298,7 +301,7 @@ public class BingoManager {
 
                     List<BingoState> newStates = parseBingoStates(json);
                     for (BingoState state : newStates) {
-                        log.info("Bingo state loaded: {} (id={}, enrolled={}, active={})",
+                        log.debug("Bingo state loaded: {} (id={}, enrolled={}, active={})",
                                 state.getName(), state.getId(), state.isEnrolled(), state.isActive());
                     }
                     if (newStates.isEmpty()) {
@@ -314,29 +317,40 @@ public class BingoManager {
 
     private List<BingoState> parseBingoStates(String json) {
         try {
-            JsonObject root = gson.fromJson(json, JsonObject.class);
-            if (root == null) {
+            BingoApiResponse response = gson.fromJson(json, BingoApiResponse.class);
+            if (response == null) {
                 return Collections.emptyList();
             }
 
-            if (root.has("active") && !root.get("active").getAsBoolean()) {
+            if (response.active != null && !response.active) {
                 return Collections.emptyList();
             }
 
             List<BingoState> states = new ArrayList<>();
 
-            if (root.has("bingos") && root.get("bingos").isJsonArray()) {
-                JsonArray bingosArray = root.getAsJsonArray("bingos");
-                for (JsonElement element : bingosArray) {
-                    if (element.isJsonObject()) {
-                        BingoState state = parseSingleBingoState(element.getAsJsonObject());
-                        if (state != null) {
-                            states.add(state);
-                        }
+            if (response.bingos != null && !response.bingos.isEmpty()) {
+                for (BingoStateDto dto : response.bingos) {
+                    BingoState state = BingoMapper.toState(dto);
+                    if (state != null) {
+                        states.add(state);
                     }
                 }
-            } else {
-                BingoState state = parseSingleBingoState(root);
+            } else if (response.id != null && response.id > 0) {
+                // Single bingo response (backward compatibility)
+                BingoStateDto dto = new BingoStateDto();
+                dto.id = response.id;
+                dto.name = response.name;
+                dto.description = response.description;
+                dto.size = response.size != null ? response.size : 5;
+                dto.startDate = response.startDate;
+                dto.endDate = response.endDate;
+                dto.status = response.status;
+                dto.codeword = response.codeword;
+                dto.tiles = response.tiles;
+                dto.userTeam = response.userTeam;
+                dto.teamProgress = response.teamProgress;
+
+                BingoState state = BingoMapper.toState(dto);
                 if (state != null) {
                     states.add(state);
                 }
@@ -346,270 +360,6 @@ public class BingoManager {
         } catch (Exception e) {
             log.error("Error parsing bingo states JSON", e);
             return Collections.emptyList();
-        }
-    }
-
-    @Nullable
-    private BingoState parseSingleBingoState(JsonObject obj) {
-        try {
-            int id = obj.has("id") ? obj.get("id").getAsInt() : 0;
-            String name = obj.has("name") ? obj.get("name").getAsString() : "";
-            String description = obj.has("description") && !obj.get("description").isJsonNull()
-                    ? obj.get("description").getAsString()
-                    : "";
-            int size = obj.has("size") ? obj.get("size").getAsInt() : 5;
-            String status = obj.has("status") ? obj.get("status").getAsString() : "";
-            String codeword = obj.has("codeword") && !obj.get("codeword").isJsonNull()
-                    ? obj.get("codeword").getAsString()
-                    : null;
-
-            Instant startDate = parseInstant(obj, "startDate");
-            Instant endDate = parseInstant(obj, "endDate");
-
-            Map<Integer, BingoTile> tiles = new HashMap<>();
-            if (obj.has("tiles")) {
-                JsonElement tilesElement = obj.get("tiles");
-                if (tilesElement.isJsonArray()) {
-                    for (JsonElement tileElement : tilesElement.getAsJsonArray()) {
-                        BingoTile tile = parseTile(tileElement.getAsJsonObject());
-                        if (tile != null) {
-                            tiles.put(tile.getId(), tile);
-                        }
-                    }
-                } else if (tilesElement.isJsonObject()) {
-                    JsonObject tilesObj = tilesElement.getAsJsonObject();
-                    for (String key : tilesObj.keySet()) {
-                        BingoTile tile = parseTile(tilesObj.getAsJsonObject(key));
-                        if (tile != null) {
-                            tiles.put(tile.getId(), tile);
-                        }
-                    }
-                }
-            }
-
-            BingoTeam userTeam = null;
-            if (obj.has("userTeam") && !obj.get("userTeam").isJsonNull()) {
-                userTeam = parseTeam(obj.getAsJsonObject("userTeam"));
-            }
-
-            Map<Integer, BingoTeamTileProgress> teamProgress = new HashMap<>();
-            if (obj.has("teamProgress")) {
-                JsonElement progressElement = obj.get("teamProgress");
-                if (progressElement.isJsonArray()) {
-                    for (JsonElement elem : progressElement.getAsJsonArray()) {
-                        BingoTeamTileProgress progress = parseProgress(elem.getAsJsonObject());
-                        if (progress != null) {
-                            teamProgress.put(progress.getBingoTileId(), progress);
-                        }
-                    }
-                } else if (progressElement.isJsonObject()) {
-                    JsonObject progressObj = progressElement.getAsJsonObject();
-                    for (String key : progressObj.keySet()) {
-                        BingoTeamTileProgress progress = parseProgress(progressObj.getAsJsonObject(key));
-                        if (progress != null) {
-                            teamProgress.put(progress.getBingoTileId(), progress);
-                        }
-                    }
-                }
-            }
-
-            return BingoState.builder()
-                    .id(id)
-                    .name(name)
-                    .description(description)
-                    .size(size)
-                    .startDate(startDate)
-                    .endDate(endDate)
-                    .status(status)
-                    .codeword(codeword)
-                    .tiles(tiles)
-                    .userTeam(userTeam)
-                    .teamProgress(teamProgress)
-                    .itemIdToTileIds(BingoState.buildItemLookup(tiles))
-                    .build();
-
-        } catch (Exception e) {
-            log.debug("Error parsing single bingo state: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private Instant parseInstant(JsonObject obj, String field) {
-        if (!obj.has(field) || obj.get(field).isJsonNull()) {
-            return null;
-        }
-        try {
-            return Instant.parse(obj.get(field).getAsString());
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private BingoTile parseTile(JsonObject obj) {
-        try {
-            int id = obj.get("id").getAsInt();
-            int bingoBoardId = obj.has("bingoBoardId") ? obj.get("bingoBoardId").getAsInt() : 0;
-            int position = obj.has("position") ? obj.get("position").getAsInt() : 0;
-            String title = obj.has("title") ? obj.get("title").getAsString() : "";
-            String description = obj.has("description") && !obj.get("description").isJsonNull()
-                    ? obj.get("description").getAsString()
-                    : "";
-            String imageUrl = obj.has("imageUrl") && !obj.get("imageUrl").isJsonNull()
-                    ? obj.get("imageUrl").getAsString()
-                    : null;
-            String wikiKey = obj.has("wikiKey") && !obj.get("wikiKey").isJsonNull()
-                    ? obj.get("wikiKey").getAsString()
-                    : null;
-            int points = obj.has("points") ? obj.get("points").getAsInt() : 1;
-            String tileTypeStr = obj.has("tileType") ? obj.get("tileType").getAsString() : "single";
-            int requiredCount = obj.has("requiredCount") ? obj.get("requiredCount").getAsInt() : 1;
-
-            List<BingoItemRequirement> itemRequirements = new ArrayList<>();
-            if (obj.has("itemRequirements") && obj.get("itemRequirements").isJsonArray()) {
-                for (JsonElement reqElement : obj.getAsJsonArray("itemRequirements")) {
-                    BingoItemRequirement req = parseItemRequirement(reqElement.getAsJsonObject());
-                    if (req != null) {
-                        itemRequirements.add(req);
-                    }
-                }
-            }
-
-            List<BingoItemGroup> itemGroups = new ArrayList<>();
-            if (obj.has("itemGroups") && obj.get("itemGroups").isJsonArray()) {
-                for (JsonElement groupElement : obj.getAsJsonArray("itemGroups")) {
-                    BingoItemGroup group = parseItemGroup(groupElement.getAsJsonObject());
-                    if (group != null) {
-                        itemGroups.add(group);
-                    }
-                }
-            }
-
-            return BingoTile.builder()
-                    .id(id)
-                    .bingoBoardId(bingoBoardId)
-                    .position(position)
-                    .title(title)
-                    .description(description)
-                    .imageUrl(imageUrl)
-                    .wikiKey(wikiKey)
-                    .points(points)
-                    .tileType(BingoTileType.fromValue(tileTypeStr))
-                    .requiredCount(requiredCount)
-                    .itemRequirements(itemRequirements)
-                    .itemGroups(itemGroups)
-                    .build();
-        } catch (Exception e) {
-            log.debug("Error parsing tile: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private BingoItemRequirement parseItemRequirement(JsonObject obj) {
-        try {
-            return BingoItemRequirement.builder()
-                    .id(obj.has("id") ? obj.get("id").getAsInt() : 0)
-                    .itemGroupId(obj.has("itemGroupId") && !obj.get("itemGroupId").isJsonNull()
-                            ? obj.get("itemGroupId").getAsInt()
-                            : null)
-                    .itemId(obj.get("itemId").getAsInt())
-                    .itemName(obj.has("itemName") ? obj.get("itemName").getAsString() : "")
-                    .requiredQuantity(obj.has("requiredQuantity") ? obj.get("requiredQuantity").getAsInt() : 1)
-                    .isAlternative(obj.has("isAlternative") && obj.get("isAlternative").getAsBoolean())
-                    .source(obj.has("source") && !obj.get("source").isJsonNull()
-                            ? obj.get("source").getAsString()
-                            : null)
-                    .build();
-        } catch (Exception e) {
-            log.debug("Error parsing item requirement: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private BingoItemGroup parseItemGroup(JsonObject obj) {
-        try {
-            List<BingoItemRequirement> items = new ArrayList<>();
-            if (obj.has("items") && obj.get("items").isJsonArray()) {
-                for (JsonElement itemElement : obj.getAsJsonArray("items")) {
-                    BingoItemRequirement item = parseItemRequirement(itemElement.getAsJsonObject());
-                    if (item != null) {
-                        items.add(item);
-                    }
-                }
-            }
-
-            return BingoItemGroup.builder()
-                    .id(obj.has("id") ? obj.get("id").getAsInt() : 0)
-                    .bingoTileId(obj.has("bingoTileId") ? obj.get("bingoTileId").getAsInt() : 0)
-                    .groupName(obj.has("groupName") ? obj.get("groupName").getAsString() : "")
-                    .requiredCount(obj.has("requiredCount") ? obj.get("requiredCount").getAsInt() : 1)
-                    .sortOrder(obj.has("sortOrder") ? obj.get("sortOrder").getAsInt() : 0)
-                    .items(items)
-                    .build();
-        } catch (Exception e) {
-            log.debug("Error parsing item group: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private BingoTeam parseTeam(JsonObject obj) {
-        try {
-            List<String> members = new ArrayList<>();
-            if (obj.has("members") && obj.get("members").isJsonArray()) {
-                for (JsonElement memberElement : obj.getAsJsonArray("members")) {
-                    if (memberElement.isJsonPrimitive()) {
-                        members.add(memberElement.getAsString());
-                    } else if (memberElement.isJsonObject()) {
-                        JsonObject memberObj = memberElement.getAsJsonObject();
-                        if (memberObj.has("rsn")) {
-                            members.add(memberObj.get("rsn").getAsString());
-                        }
-                    }
-                }
-            }
-
-            return BingoTeam.builder()
-                    .id(obj.get("id").getAsInt())
-                    .bingoBoardId(obj.has("bingoBoardId") ? obj.get("bingoBoardId").getAsInt() : 0)
-                    .name(obj.has("name") ? obj.get("name").getAsString() : "")
-                    .colorHex(obj.has("colorHex") && !obj.get("colorHex").isJsonNull()
-                            ? obj.get("colorHex").getAsString()
-                            : null)
-                    .totalPoints(obj.has("totalPoints") ? obj.get("totalPoints").getAsInt() : 0)
-                    .completedTiles(obj.has("completedTiles") ? obj.get("completedTiles").getAsInt() : 0)
-                    .partialTiles(obj.has("partialTiles") ? obj.get("partialTiles").getAsInt() : 0)
-                    .members(members)
-                    .build();
-        } catch (Exception e) {
-            log.debug("Error parsing team: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private BingoTeamTileProgress parseProgress(JsonObject obj) {
-        try {
-            List<String> proofUrls = new ArrayList<>();
-            if (obj.has("proofUrls") && obj.get("proofUrls").isJsonArray()) {
-                for (JsonElement urlElement : obj.getAsJsonArray("proofUrls")) {
-                    proofUrls.add(urlElement.getAsString());
-                }
-            }
-
-            return BingoTeamTileProgress.builder()
-                    .id(obj.has("id") ? obj.get("id").getAsInt() : 0)
-                    .teamBingoBoardId(obj.has("teamBingoBoardId") ? obj.get("teamBingoBoardId").getAsInt() : 0)
-                    .bingoTileId(obj.get("bingoTileId").getAsInt())
-                    .status(BingoTileStatus.fromValue(obj.has("status") ? obj.get("status").getAsString() : "pending"))
-                    .currentCount(obj.has("currentCount") ? obj.get("currentCount").getAsInt() : 0)
-                    .proofUrls(proofUrls)
-                    .notes(obj.has("notes") && !obj.get("notes").isJsonNull() ? obj.get("notes").getAsString() : null)
-                    .completedAt(parseInstant(obj, "completedAt"))
-                    .completedByRsn(obj.has("completedByRsn") && !obj.get("completedByRsn").isJsonNull()
-                            ? obj.get("completedByRsn").getAsString()
-                            : null)
-                    .build();
-        } catch (Exception e) {
-            log.debug("Error parsing progress: {}", e.getMessage());
-            return null;
         }
     }
 
@@ -931,39 +681,26 @@ public class BingoManager {
             }
 
             String json = response.body().string();
-            JsonArray completions = gson.fromJson(json, JsonArray.class);
+            List<BingoCompletionDto> completions = gson.fromJson(json,
+                    new TypeToken<List<BingoCompletionDto>>(){}.getType());
 
-            if (completions == null || completions.size() == 0) {
+            if (completions == null || completions.isEmpty()) {
                 return;
             }
 
             lastCompletionsFetchTime.set(Instant.now().toEpochMilli());
 
-            for (JsonElement element : completions) {
-                JsonObject obj = element.getAsJsonObject();
-                int completionId = obj.get("id").getAsInt();
-
-                if (announcedCompletionIds.contains(completionId)) {
+            for (BingoCompletionDto dto : completions) {
+                if (announcedCompletionIds.contains(dto.id)) {
                     continue;
                 }
 
-                announcedCompletionIds.add(completionId);
+                announcedCompletionIds.add(dto.id);
 
-                BingoCompletionEvent completion = BingoCompletionEvent.builder()
-                        .id(completionId)
-                        .bingoBoardId(obj.has("bingoBoardId") ? obj.get("bingoBoardId").getAsInt() : 0)
-                        .tileId(obj.has("tileId") ? obj.get("tileId").getAsInt() : 0)
-                        .tileTitle(obj.has("tileTitle") ? obj.get("tileTitle").getAsString() : "")
-                        .teamId(obj.has("teamId") ? obj.get("teamId").getAsInt() : 0)
-                        .teamName(obj.has("teamName") ? obj.get("teamName").getAsString() : "")
-                        .completedByRsn(obj.has("completedByRsn") ? obj.get("completedByRsn").getAsString() : "")
-                        .completedAt(parseInstant(obj, "completedAt"))
-                        .pointsAwarded(obj.has("pointsAwarded") ? obj.get("pointsAwarded").getAsInt() : 0)
-                        .completionType(obj.has("completionType") ? obj.get("completionType").getAsString() : "")
-                        .screenshotUrl(obj.has("screenshotUrl") && !obj.get("screenshotUrl").isJsonNull()
-                                ? obj.get("screenshotUrl").getAsString()
-                                : null)
-                        .build();
+                BingoCompletionEvent completion = BingoMapper.toCompletionEvent(dto);
+                if (completion == null) {
+                    continue;
+                }
 
                 announceCompletion(completion);
 
@@ -1036,7 +773,7 @@ public class BingoManager {
 
                 try (Response response = okHttpClient.newCall(request).execute()) {
                     if (response.isSuccessful()) {
-                        log.info("Notified server that bingo tracking was disabled for {}", username);
+                        log.debug("Notified server that bingo tracking was disabled for {}", username);
                     }
                 }
             } catch (Exception e) {
