@@ -109,7 +109,7 @@ public class EmbargoPanel extends PluginPanel {
     private final JLabel communityScoreLabel = new JLabel(htmlLabel("Community Score:", " N/A"));
     private final JLabel currentRankLabel = new JLabel(htmlLabel("Current Rank:", " N/A"));
     private final JLabel isRegisteredWithClanLabel = new JLabel(htmlLabel("Account registered:", " No"));
-    private final JLabel currentCALabel = new JLabel(htmlLabel("Current TA Tier:", " N/A"));
+    private final JLabel currentCALabel = new JLabel(htmlLabel("Current CA Tier:", " N/A"));
     final JLabel missingRequiredItemsLabel = new JLabel(
             htmlLabel("Sign in to see what requirements", " you are missing for rank up"));
     private final Font smallFont = FontManager.getRunescapeSmallFont();
@@ -571,7 +571,7 @@ public class EmbargoPanel extends PluginPanel {
         ofTheWeekOngoingPanel.removeAll();
         ofTheWeekUpcomingPanel.removeAll();
 
-        if (events == null || events.isEmpty()) {
+        if (events == null || events.size() == 0) {
             ofTheWeekOngoingPanel.add(createSmallLabel("No events"));
             ofTheWeekUpcomingPanel.setVisible(false);
             eventsContainer.revalidate();
@@ -1706,7 +1706,7 @@ public class EmbargoPanel extends PluginPanel {
                     ArrayList<String> alreadyProcessed = new ArrayList<>();
 
                     // Build out the missing requirements panel
-                    if (!missingGearReqs.isEmpty() || !missingUntradableItemIdReqs.isEmpty()) {
+                    if (missingGearReqs.size() > 0 || missingUntradableItemIdReqs.size() > 0) {
                         // Already on background thread, do item ID lookups here
                         List<Object[]> dynamicItemsData = new ArrayList<>();
                         List<Object[]> regularItemsData = new ArrayList<>();
