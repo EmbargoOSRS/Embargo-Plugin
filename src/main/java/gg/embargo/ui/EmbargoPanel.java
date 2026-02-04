@@ -44,7 +44,6 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.time.Instant;
 import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -75,7 +74,7 @@ public class EmbargoPanel extends PluginPanel {
     private DataManager dataManager;
 
     @Inject
-    private MissingRequirementsPanel missingRequirementsPanelX;
+    private MissingRequirementsPanel missingRequirementsComponent;
 
     @Inject
     private ClientThread clientThread;
@@ -95,16 +94,14 @@ public class EmbargoPanel extends PluginPanel {
     @Setter
     public boolean isLoggedIn = false;
 
-    // Keep track of all boxes
-    // private final ArrayList<ItemID> items = new ArrayList<>();
     JPanel versionPanel = new JPanel();
     JPanel missingRequirementsPanel = new JPanel();
     private static final ImageIcon ARROW_RIGHT_ICON = new ImageIcon(
             ImageUtil.loadImageResource(EmbargoPanel.class, "/util/arrow_right.png"));
     private static final ImageIcon DISCORD_ICON = new ImageIcon(
             ImageUtil.loadImageResource(EmbargoPanel.class, "/discord_icon.png"));
-    static ImageIcon GITHUB_ICON = new ImageIcon(ImageUtil.loadImageResource(EmbargoPanel.class, "/github_icon.png"));
-    static ImageIcon WEBSITE_ICON = new ImageIcon(ImageUtil.loadImageResource(EmbargoPanel.class, "/website_icon.png"));
+    private static final ImageIcon GITHUB_ICON = new ImageIcon(ImageUtil.loadImageResource(EmbargoPanel.class, "/github_icon.png"));
+    private static final ImageIcon WEBSITE_ICON = new ImageIcon(ImageUtil.loadImageResource(EmbargoPanel.class, "/website_icon.png"));
     private final JRichTextPane emailLabel = new JRichTextPane();
     private final JLabel loggedLabel = new JLabel();
     private final JLabel embargoScoreLabel = new JLabel(htmlLabel("Embargo Score:", " N/A"));
@@ -294,7 +291,7 @@ public class EmbargoPanel extends PluginPanel {
         versionPanel.setLayout(new BoxLayout(versionPanel, BoxLayout.Y_AXIS));
 
         // Set up Embargo Clan Version at top of Version panel
-        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.1"));
+        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.2"));
         version.setFont(smallFont);
         version.setAlignmentX(Component.LEFT_ALIGNMENT);
 
@@ -574,7 +571,7 @@ public class EmbargoPanel extends PluginPanel {
         ofTheWeekOngoingPanel.removeAll();
         ofTheWeekUpcomingPanel.removeAll();
 
-        if (events == null || events.size() == 0) {
+        if (events == null || events.isEmpty()) {
             ofTheWeekOngoingPanel.add(createSmallLabel("No events"));
             ofTheWeekUpcomingPanel.setVisible(false);
             eventsContainer.revalidate();
@@ -790,7 +787,7 @@ public class EmbargoPanel extends PluginPanel {
                 styleLabel(timeLabel);
                 panel.add(timeLabel);
             } catch (Exception e) {
-                // Skip time label if parsing fails
+                log.debug("Failed to parse bounty end time", e);
             }
         }
     }
@@ -916,7 +913,7 @@ public class EmbargoPanel extends PluginPanel {
                 styleLabel(timeLabel);
                 pollsPanel.add(timeLabel);
             } catch (Exception e) {
-                // Skip time label if parsing fails
+                log.debug("Failed to parse poll end time", e);
             }
         }
 
@@ -1243,7 +1240,8 @@ public class EmbargoPanel extends PluginPanel {
                                 iconSize, iconSize, Image.SCALE_SMOOTH);
 
                         // Convert to BufferedImage for better performance
-                        BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize, BufferedImage.TYPE_INT_ARGB);
+                        BufferedImage bufferedScaled = new BufferedImage(iconSize, iconSize,
+                                BufferedImage.TYPE_INT_ARGB);
                         Graphics2D g2d = bufferedScaled.createGraphics();
                         g2d.drawImage(scaledImage, 0, 0, null);
                         g2d.dispose();
@@ -1343,7 +1341,8 @@ public class EmbargoPanel extends PluginPanel {
                         groupName = groupName.substring(0, 12) + "...";
                     }
                     Color progressColor = groupProgress >= required ? COLOR_GREEN : COLOR_ORANGE;
-                    bingoPanel.add(createSmallLabel("    " + groupName + ": " + groupProgress + "/" + required, progressColor));
+                    bingoPanel.add(createSmallLabel("    " + groupName + ": " + groupProgress + "/" + required,
+                            progressColor));
                 }
             } else {
                 // For quantity tiles, show count
@@ -1359,9 +1358,11 @@ public class EmbargoPanel extends PluginPanel {
 
     /**
      * Calculates progress for a specific group within a grouped tile.
-     * This is a simplified calculation based on the current count and items in the group.
+     * This is a simplified calculation based on the current count and items in the
+     * group.
      */
-    private int calculateGroupProgress(BingoState state, BingoTile tile, BingoItemGroup group, BingoTeamTileProgress progress) {
+    private int calculateGroupProgress(BingoState state, BingoTile tile, BingoItemGroup group,
+            BingoTeamTileProgress progress) {
         // If we have detailed progress entries, we could count items per group
         // For now, return a rough estimate based on the items in the group
         // This would need enhancement if we want accurate per-group tracking
@@ -1511,7 +1512,7 @@ public class EmbargoPanel extends PluginPanel {
         currentCALabel.setText(htmlLabel("Current CA Tier:", " Loading..."));
 
         // Clear existing missing items
-        missingRequirementsPanelX.clearItems();
+        missingRequirementsComponent.clearItems();
         updateMissingItemCount(0);
 
         // Stagger API calls to avoid network burst on manual refresh
@@ -1593,7 +1594,7 @@ public class EmbargoPanel extends PluginPanel {
     public void updateLoggedIn(boolean scheduled) {
         if (dataManager.stopTryingForAccount.get()) {
             emailLabel.setText("Account not registered with Embargo");
-            missingRequirementsPanelX.removeAll();
+            missingRequirementsComponent.removeAll();
             missingRequirementsContainer.removeAll();
             missingRequirementsPanel.removeAll();
             missingRequiredItemsLabel.removeAll();
@@ -1705,7 +1706,7 @@ public class EmbargoPanel extends PluginPanel {
                     ArrayList<String> alreadyProcessed = new ArrayList<>();
 
                     // Build out the missing requirements panel
-                    if (missingGearReqs.size() > 0 || missingUntradableItemIdReqs.size() > 0) {
+                    if (!missingGearReqs.isEmpty() || !missingUntradableItemIdReqs.isEmpty()) {
                         // Already on background thread, do item ID lookups here
                         List<Object[]> dynamicItemsData = new ArrayList<>();
                         List<Object[]> regularItemsData = new ArrayList<>();
@@ -1720,13 +1721,13 @@ public class EmbargoPanel extends PluginPanel {
                                 String[] dynamicNames = itemName.split("\\|");
                                 int[] itemIds = new int[dynamicNames.length];
                                 for (int i = 0; i < dynamicNames.length; i++) {
-                                    itemIds[i] = missingRequirementsPanelX
+                                    itemIds[i] = missingRequirementsComponent
                                             .findItemIdByName(dynamicNames[i].trim());
                                 }
                                 dynamicItemsData.add(new Object[] { dynamicNames, itemIds });
                             } else {
                                 // Regular item: pre-resolve item ID
-                                int itemId = missingRequirementsPanelX.findItemIdByName(itemName);
+                                int itemId = missingRequirementsComponent.findItemIdByName(itemName);
                                 regularItemsData.add(new Object[] { itemName, itemId });
                             }
                         }
@@ -1741,39 +1742,40 @@ public class EmbargoPanel extends PluginPanel {
                             untradableIds.add(mu.getAsInt());
                         }
 
-                        // Use clientThread for item additions since they may load images via ItemManager
+                        // Use clientThread for item additions since they may load images via
+                        // ItemManager
                         clientThread.invokeLater(() -> {
                             // Begin batching to prevent multiple panel rebuilds
-                            missingRequirementsPanelX.beginBatchUpdate();
+                            missingRequirementsComponent.beginBatchUpdate();
 
                             try {
                                 // Add all dynamic items
                                 for (Object[] data : dynamicItemsData) {
                                     String[] names = (String[]) data[0];
                                     int[] ids = (int[]) data[1];
-                                    missingRequirementsPanelX.addDynamicMissingItem(names, ids, 3000);
+                                    missingRequirementsComponent.addDynamicMissingItem(names, ids, 3000);
                                 }
 
                                 // Add all regular items
                                 for (Object[] data : regularItemsData) {
                                     String name = (String) data[0];
                                     int id = (int) data[1];
-                                    missingRequirementsPanelX.addMissingItem(name, id);
+                                    missingRequirementsComponent.addMissingItem(name, id);
                                 }
 
                                 // Add untradable items
                                 for (int itemId : untradableIds) {
-                                    missingRequirementsPanelX.addMissingItem("", itemId);
+                                    missingRequirementsComponent.addMissingItem("", itemId);
                                 }
                             } finally {
                                 // End batching - this triggers a single panel rebuild
-                                missingRequirementsPanelX.endBatchUpdate();
+                                missingRequirementsComponent.endBatchUpdate();
                             }
 
                             // Update the container panel on EDT
                             SwingUtilities.invokeLater(() -> {
                                 missingRequirementsPanel.removeAll();
-                                missingRequirementsPanel.add(missingRequirementsPanelX);
+                                missingRequirementsPanel.add(missingRequirementsComponent);
                                 missingRequirementsPanel.revalidate();
                                 missingRequirementsPanel.repaint();
 
@@ -1793,9 +1795,6 @@ public class EmbargoPanel extends PluginPanel {
                     log.error("Error fetching profile data", ex);
                     return null;
                 });
-
-                this.isLoggedIn = true;
-
             }
         }
     }
@@ -1828,7 +1827,7 @@ public class EmbargoPanel extends PluginPanel {
                 .setText(htmlLabel("Sign in to see what requirements", " you are missing for rank up"));
         missingRequiredItemsLabel.setFont(smallFont);
         missingRequiredItemsLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        missingRequirementsPanelX.clearItems();
+        missingRequirementsComponent.clearItems();
         updateMissingItemCount(0);
 
         // Rebuild missing requirements panel content (preserve header)
@@ -1850,7 +1849,7 @@ public class EmbargoPanel extends PluginPanel {
         currentRankLabel.setText(htmlLabel("Current Rank:", " N/A"));
         accountScoreLabel.setText(htmlLabel("Account Score:", " N/A"));
         communityScoreLabel.setText(htmlLabel("Community Score:", " N/A"));
-        currentCALabel.setText(htmlLabel("Current TA Tier:", " N/A"));
+        currentCALabel.setText(htmlLabel("Current CA Tier:", " N/A"));
 
         // Refresh UI
         versionPanel.revalidate();
@@ -1873,7 +1872,7 @@ public class EmbargoPanel extends PluginPanel {
             bingoStateChangeListener = null;
         }
 
-        missingRequirementsPanelX.shutdown();
+        missingRequirementsComponent.shutdown();
         this.updateLoggedIn(false);
     }
 
