@@ -28,7 +28,7 @@ public class BingoMapper {
 
         Map<Integer, BingoTeamTileProgress> teamProgress = new HashMap<>();
         if (dto.teamProgress != null) {
-            for (BingoTeamTileProgressDto progressDto : dto.teamProgress) {
+            for (BingoTeamTileProgressDto progressDto : dto.teamProgress.values()) {
                 BingoTeamTileProgress progress = toProgress(progressDto);
                 if (progress != null) {
                     teamProgress.put(progress.getBingoTileId(), progress);

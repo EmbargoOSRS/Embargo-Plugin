@@ -18,5 +18,5 @@ public class BingoStateDto {
     public String codeword;
     public Map<String, BingoTileDto> tiles;
     public BingoTeamDto userTeam;
-    public List<BingoTeamTileProgressDto> teamProgress;
+    public Map<String, BingoTeamTileProgressDto> teamProgress;
 }
