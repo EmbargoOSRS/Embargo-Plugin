@@ -187,10 +187,21 @@ public interface EmbargoConfig extends Config
     }
 
     @ConfigItem(
+            keyName = "showBingoCodeword",
+            name = "Show Bingo Codeword",
+            description = "Display the secret bingo codeword overlay when enrolled in an active bingo",
+            position = 2,
+            section = bingoSettings
+    )
+    default boolean showBingoCodeword() {
+        return true;
+    }
+
+    @ConfigItem(
             keyName = "bingoScreenshots",
             name = "Auto-capture Screenshots",
             description = "Automatically capture and upload screenshots when obtaining bingo tile items",
-            position = 2,
+            position = 3,
             section = bingoSettings
     )
     default boolean bingoScreenshots() {

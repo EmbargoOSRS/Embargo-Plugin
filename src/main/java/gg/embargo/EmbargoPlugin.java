@@ -1,6 +1,7 @@
 package gg.embargo;
 
 import com.google.inject.Provides;
+import gg.embargo.bingo.BingoCodewordOverlayManager;
 import gg.embargo.bingo.BingoManager;
 import gg.embargo.bingo.BingoScreenshotManager;
 import gg.embargo.collections.*;
@@ -103,7 +104,12 @@ public class EmbargoPlugin extends Plugin {
 	@Inject
 	private BingoScreenshotManager bingoScreenshotManager;
 
+	@Inject
+	private BingoCodewordOverlayManager bingoCodewordOverlayManager;
+
 	private RuneScapeProfileType lastProfile;
+
+	private boolean bingoAlertSentThisSession = false;
 
 	private NavigationButton navButton;
 
@@ -180,9 +186,12 @@ public class EmbargoPlugin extends Plugin {
 			npcRenameManager.startUp();
 		}
 
-		// Initialize bingo tracking
-		bingoManager.startUp();
-		bingoScreenshotManager.startUp();
+		// Initialize bingo system (only if enabled)
+		if (config != null && config.enableBingo()) {
+			bingoManager.startUp();
+			bingoScreenshotManager.startUp();
+			bingoCodewordOverlayManager.startUp();
+		}
 	}
 
 	@Inject
@@ -215,8 +224,13 @@ public class EmbargoPlugin extends Plugin {
 		itemRenameManager.shutDown();
 		npcRenameManager.shutDown();
 		commandManager.shutDown();
-		bingoManager.shutDown();
-		bingoScreenshotManager.shutDown();
+
+		// Shutdown bingo system (only if enabled)
+		if (config != null && config.enableBingo()) {
+			bingoManager.shutDown();
+			bingoScreenshotManager.shutDown();
+			bingoCodewordOverlayManager.shutDown();
+		}
 	}
 
 	@Subscribe
@@ -241,6 +255,10 @@ public class EmbargoPlugin extends Plugin {
 
 			if (isUsernameRegistered.get()) {
 				embargoPanel.updateLoggedIn(true);
+
+				// Send bingo alert on login
+				sendBingoLoginAlert();
+
 				return true;
 			}
 
@@ -252,10 +270,28 @@ public class EmbargoPlugin extends Plugin {
 					if (isRegistered) {
 						embargoPanel.updateLoggedIn(true);
 						isUsernameRegistered.set(true);
+
+						// Send bingo alert on login
+						sendBingoLoginAlert();
 					}
 				});
 			}
 			return isUsernameRegistered.get();
+		});
+	}
+
+	private void sendBingoLoginAlert() {
+		if (config == null || !config.enableBingo()) {
+			return;
+		}
+
+		// Only send once per session, but allow re-alerting on re-login
+		boolean isFirstAlert = !bingoAlertSentThisSession;
+		bingoAlertSentThisSession = true;
+
+		// Delay slightly to ensure bingo state is loaded
+		clientThread.invokeLater(() -> {
+			bingoManager.sendBingoAlert(isFirstAlert);
 		});
 	}
 
@@ -280,6 +316,12 @@ public class EmbargoPlugin extends Plugin {
 
 		// Reset skill cache
 		skillLevelCache.clear();
+
+		// Clear bingo session state
+		if (config != null && config.enableBingo()) {
+			bingoManager.onLogout();
+		}
+		bingoAlertSentThisSession = false;
 	}
 
 	@Schedule(period = SECONDS_BETWEEN_UPLOADS, unit = ChronoUnit.SECONDS, asynchronous = true)
@@ -477,9 +519,22 @@ public class EmbargoPlugin extends Plugin {
 			}
 		}
 
+		// Handle bingo master switch config change
+		if (event.getKey().equals("enableBingo")) {
+			if (config.enableBingo()) {
+				bingoManager.startUp();
+				bingoScreenshotManager.startUp();
+				bingoCodewordOverlayManager.startUp();
+			} else {
+				bingoManager.shutDown();
+				bingoScreenshotManager.shutDown();
+				bingoCodewordOverlayManager.shutDown();
+			}
+		}
+
 		// Handle bingo tracking config change
 		if (event.getKey().equals("enableBingoTracking")) {
-			if (!config.enableBingoTracking()) {
+			if (config.enableBingo() && !config.enableBingoTracking()) {
 				// Notify server that tracking was disabled
 				bingoManager.notifyTrackingDisabled();
 			}
