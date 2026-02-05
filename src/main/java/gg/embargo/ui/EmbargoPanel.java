@@ -1204,7 +1204,8 @@ public class EmbargoPanel extends PluginPanel {
                     imageLoadSemaphore.acquire();
                     loadTileImageInternal(tilePanel, imageUrl, iconSize, cacheKey);
                 } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                    // Don't interrupt shared executor threads - just skip this image load
+                    log.debug("Image load interrupted for: {}", imageUrl);
                 }
             });
             return;
@@ -1260,7 +1261,7 @@ public class EmbargoPanel extends PluginPanel {
                         });
                     }
                 } catch (Exception e) {
-                    log.debug("Failed to process bingo tile image: {}", imageUrl);
+                    log.debug("Failed to process bingo tile image: {}", imageUrl, e);
                 } finally {
                     imageLoadSemaphore.release();
                 }
