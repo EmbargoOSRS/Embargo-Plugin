@@ -34,6 +34,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -57,7 +58,10 @@ public class BingoManager {
             "You have a funny feeling like you('re| would have been) being followed\\.");
     private static final Pattern PET_INSURED_PATTERN = Pattern.compile(
             "You feel something weird sneaking into your backpack\\.");
+    private static final Pattern UNTRADEABLE_DROP_PATTERN = Pattern.compile(
+            "Untradeable drop: (.+)");
 
+    private static final int MAX_PET_TICKS_WAIT = 5;
     private static final int STATE_REFRESH_INTERVAL_SECONDS = 60;
     private static final int COMPLETIONS_REFRESH_INTERVAL_SECONDS = 30;
 
@@ -112,6 +116,9 @@ public class BingoManager {
     private final List<Consumer<List<BingoState>>> stateChangeListeners = new CopyOnWriteArrayList<>();
     private final List<Consumer<BingoCompletionEvent>> completionListeners = new CopyOnWriteArrayList<>();
     private volatile boolean pendingPetDrop = false;
+    private volatile String pendingPetName = null;
+    private volatile int pendingPetItemId = -1;
+    private final AtomicInteger petTicksWaited = new AtomicInteger(0);
 
     public void startUp() {
         if (started.getAndSet(true)) {
@@ -176,6 +183,7 @@ public class BingoManager {
         pendingSubmissions.clear();
         stateChangeListeners.clear();
         completionListeners.clear();
+        resetPetState();
     }
 
     public void addStateChangeListener(Consumer<List<BingoState>> listener) {
@@ -426,10 +434,21 @@ public class BingoManager {
 
     @Subscribe
     public void onGameTick(GameTick event) {
-        // Fallback for duplicate pet drops where no collection log message follows.
-        if (pendingPetDrop) {
-            pendingPetDrop = false;
+        if (!pendingPetDrop) {
+            return;
+        }
+
+        // If we already resolved the pet name (e.g. from untradeable drop message), submit now
+        if (pendingPetName != null) {
+            submitPetDrop(pendingPetItemId, pendingPetName);
+            resetPetState();
+            return;
+        }
+
+        // Wait up to MAX_PET_TICKS_WAIT ticks for identification messages to arrive
+        if (petTicksWaited.incrementAndGet() > MAX_PET_TICKS_WAIT) {
             submitPetDrop(-1, "Pet");
+            resetPetState();
         }
     }
 
@@ -450,6 +469,14 @@ public class BingoManager {
             return;
         }
 
+        if (pendingPetDrop && pendingPetName == null) {
+            Matcher untradeableMatcher = UNTRADEABLE_DROP_PATTERN.matcher(message);
+            if (untradeableMatcher.matches()) {
+                resolvePetIdentity(untradeableMatcher.group(1));
+                return;
+            }
+        }
+
         Matcher clogMatcher = COLLECTION_LOG_PATTERN.matcher(message);
         if (clogMatcher.matches()) {
             String itemName = clogMatcher.group(1);
@@ -459,6 +486,36 @@ public class BingoManager {
 
     private void handlePetDrop() {
         pendingPetDrop = true;
+        pendingPetName = null;
+        pendingPetItemId = -1;
+        petTicksWaited.set(0);
+    }
+
+    private void resolvePetIdentity(String itemName) {
+        List<BingoState> trackingStates = getTrackingStates();
+        for (BingoState state : trackingStates) {
+            for (BingoTile tile : state.getTilesByPosition()) {
+                if (tile.getTileType() != BingoTileType.PET) {
+                    continue;
+                }
+                for (BingoItemRequirement req : tile.getItemRequirements()) {
+                    if (req.getItemName() != null && req.getItemName().equalsIgnoreCase(itemName)) {
+                        pendingPetName = itemName;
+                        pendingPetItemId = req.getItemId();
+                        return;
+                    }
+                }
+            }
+        }
+        // Name from chat but not matching a tile requirement — store name anyway
+        pendingPetName = itemName;
+    }
+
+    private void resetPetState() {
+        pendingPetDrop = false;
+        pendingPetName = null;
+        pendingPetItemId = -1;
+        petTicksWaited.set(0);
     }
 
     private void submitPetDrop(int itemId, String itemName) {
@@ -519,33 +576,12 @@ public class BingoManager {
 
         log.debug("Collection log unlock detected: {}", itemName);
 
-        // If a pet drop message preceded this collection log message (same tick),
+        // If a pet drop message preceded this collection log message,
         // resolve the pet identity from the item name and submit via the pet path.
         if (pendingPetDrop) {
-            int resolvedItemId = -1;
-            for (BingoState state : trackingStates) {
-                for (BingoTile tile : state.getTilesByPosition()) {
-                    if (tile.getTileType() != BingoTileType.PET) {
-                        continue;
-                    }
-                    for (BingoItemRequirement req : tile.getItemRequirements()) {
-                        if (req.getItemName() != null && req.getItemName().equalsIgnoreCase(itemName)) {
-                            resolvedItemId = req.getItemId();
-                            break;
-                        }
-                    }
-                    if (resolvedItemId != -1) {
-                        break;
-                    }
-                }
-                if (resolvedItemId != -1) {
-                    break;
-                }
-            }
-
-            pendingPetDrop = false;
-            submitPetDrop(resolvedItemId != -1 ? resolvedItemId : -1,
-                    resolvedItemId != -1 ? itemName : "Pet");
+            resolvePetIdentity(itemName);
+            submitPetDrop(pendingPetItemId, pendingPetName != null ? pendingPetName : "Pet");
+            resetPetState();
             return;
         }
 
