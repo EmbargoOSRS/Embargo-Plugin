@@ -13,6 +13,7 @@ import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.EventBus;
@@ -110,6 +111,7 @@ public class BingoManager {
     private final AtomicLong lastCompletionsFetchTime = new AtomicLong(0);
     private final List<Consumer<List<BingoState>>> stateChangeListeners = new CopyOnWriteArrayList<>();
     private final List<Consumer<BingoCompletionEvent>> completionListeners = new CopyOnWriteArrayList<>();
+    private volatile boolean pendingPetDrop = false;
 
     public void startUp() {
         if (started.getAndSet(true)) {
@@ -423,6 +425,15 @@ public class BingoManager {
     }
 
     @Subscribe
+    public void onGameTick(GameTick event) {
+        // Fallback for duplicate pet drops where no collection log message follows.
+        if (pendingPetDrop) {
+            pendingPetDrop = false;
+            submitPetDrop(-1, "Pet");
+        }
+    }
+
+    @Subscribe
     public void onChatMessage(ChatMessage event) {
         if (!shouldTrackDrops()) {
             return;
@@ -447,6 +458,10 @@ public class BingoManager {
     }
 
     private void handlePetDrop() {
+        pendingPetDrop = true;
+    }
+
+    private void submitPetDrop(int itemId, String itemName) {
         List<BingoState> trackingStates = getTrackingStates();
         if (trackingStates.isEmpty()) {
             return;
@@ -466,12 +481,16 @@ public class BingoManager {
                         continue;
                     }
 
+                    if (itemId != -1 && !tile.acceptsItem(itemId)) {
+                        continue;
+                    }
+
                     BingoDropSubmission submission = BingoDropSubmission.builder()
                             .bingoBoardId(state.getId())
                             .tileId(tile.getId())
                             .playerName(playerName)
-                            .itemId(-1)
-                            .itemName("Pet")
+                            .itemId(itemId)
+                            .itemName(itemName)
                             .quantity(1)
                             .source("Pet Drop")
                             .isPet(true)
@@ -481,7 +500,7 @@ public class BingoManager {
                     submitDropAsync(submission);
 
                     if (screenshotManager != null) {
-                        screenshotManager.captureAndUpload(state.getId(), tile.getId(), -1, "Pet");
+                        screenshotManager.captureAndUpload(state.getId(), tile.getId(), itemId, itemName);
                     }
                 }
             }
@@ -499,6 +518,36 @@ public class BingoManager {
         }
 
         log.debug("Collection log unlock detected: {}", itemName);
+
+        // If a pet drop message preceded this collection log message (same tick),
+        // resolve the pet identity from the item name and submit via the pet path.
+        if (pendingPetDrop) {
+            int resolvedItemId = -1;
+            for (BingoState state : trackingStates) {
+                for (BingoTile tile : state.getTilesByPosition()) {
+                    if (tile.getTileType() != BingoTileType.PET) {
+                        continue;
+                    }
+                    for (BingoItemRequirement req : tile.getItemRequirements()) {
+                        if (req.getItemName() != null && req.getItemName().equalsIgnoreCase(itemName)) {
+                            resolvedItemId = req.getItemId();
+                            break;
+                        }
+                    }
+                    if (resolvedItemId != -1) {
+                        break;
+                    }
+                }
+                if (resolvedItemId != -1) {
+                    break;
+                }
+            }
+
+            pendingPetDrop = false;
+            submitPetDrop(resolvedItemId != -1 ? resolvedItemId : -1,
+                    resolvedItemId != -1 ? itemName : "Pet");
+            return;
+        }
 
         String playerName = client.getLocalPlayer().getName();
 
