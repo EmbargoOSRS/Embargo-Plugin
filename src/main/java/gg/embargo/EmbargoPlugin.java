@@ -2,6 +2,7 @@ package gg.embargo;
 
 import com.google.inject.Provides;
 import gg.embargo.bingo.BingoCodewordOverlayManager;
+import gg.embargo.bingo.BingoDropDetector;
 import gg.embargo.bingo.BingoManager;
 import gg.embargo.bingo.BingoScreenshotManager;
 import gg.embargo.collections.*;
@@ -102,6 +103,9 @@ public class EmbargoPlugin extends Plugin {
 	private BingoManager bingoManager;
 
 	@Inject
+	private BingoDropDetector bingoDropDetector;
+
+	@Inject
 	private BingoScreenshotManager bingoScreenshotManager;
 
 	@Inject
@@ -189,6 +193,7 @@ public class EmbargoPlugin extends Plugin {
 		// Initialize bingo system (only if enabled)
 		if (config != null && config.enableBingo()) {
 			bingoManager.startUp();
+			bingoDropDetector.startUp();
 			bingoScreenshotManager.startUp();
 			bingoCodewordOverlayManager.startUp();
 		}
@@ -227,6 +232,7 @@ public class EmbargoPlugin extends Plugin {
 
 		// Shutdown bingo system (only if enabled)
 		if (config != null && config.enableBingo()) {
+			bingoDropDetector.shutDown();
 			bingoManager.shutDown();
 			bingoScreenshotManager.shutDown();
 			bingoCodewordOverlayManager.shutDown();

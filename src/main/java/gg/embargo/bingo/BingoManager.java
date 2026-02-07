@@ -11,18 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.api.ItemComposition;
-import net.runelite.api.events.ChatMessage;
-import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
-import net.runelite.client.config.RuneScapeProfileType;
-import net.runelite.client.eventbus.EventBus;
-import net.runelite.client.eventbus.Subscribe;
-import net.runelite.client.game.ItemManager;
-import net.runelite.client.game.ItemStack;
-import net.runelite.client.plugins.loottracker.LootReceived;
-import net.runelite.client.util.Text;
-import net.runelite.http.api.loottracker.LootRecordType;
 import okhttp3.*;
 
 import javax.annotation.Nullable;
@@ -34,11 +23,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Slf4j
 @Singleton
@@ -52,16 +38,6 @@ public class BingoManager {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final Pattern COLLECTION_LOG_PATTERN = Pattern.compile(
-            "New item added to your collection log: (.*)");
-    private static final Pattern PET_DROP_PATTERN = Pattern.compile(
-            "You have a funny feeling like you('re| would have been) being followed\\.");
-    private static final Pattern PET_INSURED_PATTERN = Pattern.compile(
-            "You feel something weird sneaking into your backpack\\.");
-    private static final Pattern UNTRADEABLE_DROP_PATTERN = Pattern.compile(
-            "Untradeable drop: (.+)");
-
-    private static final int MAX_PET_TICKS_WAIT = 5;
     private static final int STATE_REFRESH_INTERVAL_SECONDS = 60;
     private static final int COMPLETIONS_REFRESH_INTERVAL_SECONDS = 30;
 
@@ -78,13 +54,7 @@ public class BingoManager {
     private Gson gson;
 
     @Inject
-    private ItemManager itemManager;
-
-    @Inject
     private EmbargoConfig config;
-
-    @Inject
-    private EventBus eventBus;
 
     @Inject
     @Nullable
@@ -115,10 +85,6 @@ public class BingoManager {
     private final AtomicLong lastCompletionsFetchTime = new AtomicLong(0);
     private final List<Consumer<List<BingoState>>> stateChangeListeners = new CopyOnWriteArrayList<>();
     private final List<Consumer<BingoCompletionEvent>> completionListeners = new CopyOnWriteArrayList<>();
-    private volatile boolean pendingPetDrop = false;
-    private volatile String pendingPetName = null;
-    private volatile int pendingPetItemId = -1;
-    private final AtomicInteger petTicksWaited = new AtomicInteger(0);
 
     public void startUp() {
         if (started.getAndSet(true)) {
@@ -133,8 +99,6 @@ public class BingoManager {
             t.setDaemon(true);
             return t;
         });
-
-        eventBus.register(this);
 
         refreshBingoState();
 
@@ -161,7 +125,6 @@ public class BingoManager {
         log.debug("Shutting down BingoManager");
 
         trackingActive.set(false);
-        eventBus.unregister(this);
 
         if (stateRefreshFuture != null) {
             stateRefreshFuture.cancel(false);
@@ -183,7 +146,6 @@ public class BingoManager {
         pendingSubmissions.clear();
         stateChangeListeners.clear();
         completionListeners.clear();
-        resetPetState();
     }
 
     public void addStateChangeListener(Consumer<List<BingoState>> listener) {
@@ -388,234 +350,7 @@ public class BingoManager {
         }
     }
 
-    @Subscribe
-    public void onLootReceived(LootReceived event) {
-        if (!shouldTrackDrops()) {
-            return;
-        }
-
-        LootRecordType eventType = event.getType();
-        if (eventType != LootRecordType.NPC && eventType != LootRecordType.EVENT) {
-            return;
-        }
-
-        if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD) {
-            return;
-        }
-
-        List<BingoState> trackingStates = getTrackingStates();
-        if (trackingStates.isEmpty()) {
-            return;
-        }
-
-        String source = event.getName();
-
-        for (ItemStack itemStack : event.getItems()) {
-            int itemId = itemStack.getId();
-
-            ItemComposition itemComp = itemManager.getItemComposition(itemId);
-            String itemName = itemComp != null ? itemComp.getName() : "Unknown";
-
-            for (BingoState state : trackingStates) {
-                Set<Integer> matchingTileIds = state.getTileIdsForItem(itemId);
-                if (!matchingTileIds.isEmpty()) {
-                    for (int tileId : matchingTileIds) {
-                        BingoTeamTileProgress progress = state.getProgress(tileId);
-                        if (progress != null && progress.isCompleted()) {
-                            log.debug("Skipping drop for already completed tile {}", tileId);
-                            continue;
-                        }
-                        submitDrop(state, tileId, itemId, itemName, itemStack.getQuantity(), source, false, false);
-                    }
-                }
-            }
-        }
-    }
-
-    @Subscribe
-    public void onGameTick(GameTick event) {
-        if (!pendingPetDrop) {
-            return;
-        }
-
-        // If we already resolved the pet name (e.g. from untradeable drop message), submit now
-        if (pendingPetName != null) {
-            submitPetDrop(pendingPetItemId, pendingPetName);
-            resetPetState();
-            return;
-        }
-
-        // Wait up to MAX_PET_TICKS_WAIT ticks for identification messages to arrive
-        if (petTicksWaited.incrementAndGet() > MAX_PET_TICKS_WAIT) {
-            submitPetDrop(-1, "Pet");
-            resetPetState();
-        }
-    }
-
-    @Subscribe
-    public void onChatMessage(ChatMessage event) {
-        if (!shouldTrackDrops()) {
-            return;
-        }
-
-        if (event.getType() != ChatMessageType.GAMEMESSAGE && event.getType() != ChatMessageType.SPAM) {
-            return;
-        }
-
-        String message = Text.removeTags(event.getMessage());
-
-        if (PET_DROP_PATTERN.matcher(message).find() || PET_INSURED_PATTERN.matcher(message).find()) {
-            handlePetDrop();
-            return;
-        }
-
-        if (pendingPetDrop && pendingPetName == null) {
-            Matcher untradeableMatcher = UNTRADEABLE_DROP_PATTERN.matcher(message);
-            if (untradeableMatcher.matches()) {
-                resolvePetIdentity(untradeableMatcher.group(1));
-                return;
-            }
-        }
-
-        Matcher clogMatcher = COLLECTION_LOG_PATTERN.matcher(message);
-        if (clogMatcher.matches()) {
-            String itemName = clogMatcher.group(1);
-            handleCollectionLogUnlock(itemName);
-        }
-    }
-
-    private void handlePetDrop() {
-        pendingPetDrop = true;
-        pendingPetName = null;
-        pendingPetItemId = -1;
-        petTicksWaited.set(0);
-    }
-
-    private void resolvePetIdentity(String itemName) {
-        List<BingoState> trackingStates = getTrackingStates();
-        for (BingoState state : trackingStates) {
-            for (BingoTile tile : state.getTilesByPosition()) {
-                if (tile.getTileType() != BingoTileType.PET) {
-                    continue;
-                }
-                for (BingoItemRequirement req : tile.getItemRequirements()) {
-                    if (req.getItemName() != null && req.getItemName().equalsIgnoreCase(itemName)) {
-                        pendingPetName = itemName;
-                        pendingPetItemId = req.getItemId();
-                        return;
-                    }
-                }
-            }
-        }
-        // Name from chat but not matching a tile requirement — store name anyway
-        pendingPetName = itemName;
-    }
-
-    private void resetPetState() {
-        pendingPetDrop = false;
-        pendingPetName = null;
-        pendingPetItemId = -1;
-        petTicksWaited.set(0);
-    }
-
-    private void submitPetDrop(int itemId, String itemName) {
-        List<BingoState> trackingStates = getTrackingStates();
-        if (trackingStates.isEmpty()) {
-            return;
-        }
-
-        if (client.getLocalPlayer() == null) {
-            return;
-        }
-        String playerName = client.getLocalPlayer().getName();
-
-        for (BingoState state : trackingStates) {
-            for (BingoTile tile : state.getTilesByPosition()) {
-                if (tile.getTileType() == BingoTileType.PET) {
-                    BingoTeamTileProgress progress = state.getProgress(tile.getId());
-                    if (progress != null && progress.isCompleted()) {
-                        log.debug("Skipping pet drop for already completed tile {}", tile.getId());
-                        continue;
-                    }
-
-                    if (itemId != -1 && !tile.acceptsItem(itemId)) {
-                        continue;
-                    }
-
-                    BingoDropSubmission submission = BingoDropSubmission.builder()
-                            .bingoBoardId(state.getId())
-                            .tileId(tile.getId())
-                            .playerName(playerName)
-                            .itemId(itemId)
-                            .itemName(itemName)
-                            .quantity(1)
-                            .source("Pet Drop")
-                            .isPet(true)
-                            .world(client.getWorld())
-                            .build();
-
-                    submitDropAsync(submission);
-
-                    if (screenshotManager != null) {
-                        screenshotManager.captureAndUpload(state.getId(), tile.getId(), itemId, itemName);
-                    }
-                }
-            }
-        }
-    }
-
-    private void handleCollectionLogUnlock(String itemName) {
-        List<BingoState> trackingStates = getTrackingStates();
-        if (trackingStates.isEmpty()) {
-            return;
-        }
-
-        if (client.getLocalPlayer() == null) {
-            return;
-        }
-
-        log.debug("Collection log unlock detected: {}", itemName);
-
-        // If a pet drop message preceded this collection log message,
-        // resolve the pet identity from the item name and submit via the pet path.
-        if (pendingPetDrop) {
-            resolvePetIdentity(itemName);
-            submitPetDrop(pendingPetItemId, pendingPetName != null ? pendingPetName : "Pet");
-            resetPetState();
-            return;
-        }
-
-        String playerName = client.getLocalPlayer().getName();
-
-        for (BingoState state : trackingStates) {
-            for (BingoTile tile : state.getTilesByPosition()) {
-                BingoTeamTileProgress progress = state.getProgress(tile.getId());
-                if (progress != null && progress.isCompleted()) {
-                    continue;
-                }
-
-                for (BingoItemRequirement req : tile.getItemRequirements()) {
-                    if (req.getItemName() != null && req.getItemName().equalsIgnoreCase(itemName)) {
-                        BingoDropSubmission submission = BingoDropSubmission.builder()
-                                .bingoBoardId(state.getId())
-                                .tileId(tile.getId())
-                                .playerName(playerName)
-                                .itemId(req.getItemId())
-                                .itemName(itemName)
-                                .quantity(1)
-                                .source("Collection Log")
-                                .fromCollectionLog(true)
-                                .world(client.getWorld())
-                                .build();
-
-                        submitDropAsync(submission);
-                    }
-                }
-            }
-        }
-    }
-
-    private void submitDrop(BingoState state, int tileId, int itemId, String itemName,
+    void submitDrop(BingoState state, int tileId, int itemId, String itemName,
             int quantity, String source, boolean fromCollectionLog, boolean isPet) {
         if (client.getLocalPlayer() == null) {
             return;

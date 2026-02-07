@@ -10,9 +10,7 @@ import gg.embargo.bingo.BingoManager;
 import gg.embargo.bingo.BingoState;
 import gg.embargo.bingo.BingoTeam;
 import gg.embargo.bingo.BingoTile;
-import gg.embargo.bingo.BingoTileType;
 import gg.embargo.bingo.BingoTileStatus;
-import gg.embargo.bingo.BingoItemGroup;
 import gg.embargo.bingo.BingoTeamTileProgress;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -291,7 +289,7 @@ public class EmbargoPanel extends PluginPanel {
         versionPanel.setLayout(new BoxLayout(versionPanel, BoxLayout.Y_AXIS));
 
         // Set up Embargo Clan Version at top of Version panel
-        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.3"));
+        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.4"));
         version.setFont(smallFont);
         version.setAlignmentX(Component.LEFT_ALIGNMENT);
 
@@ -1061,9 +1059,6 @@ public class EmbargoPanel extends PluginPanel {
 
                 // Show visual bingo board grid
                 addBingoBoardGrid(state);
-
-                // Show in-progress tiles with group details
-                addInProgressTilesToPanel(state);
             }
         } else {
             // Not enrolled
@@ -1292,99 +1287,6 @@ public class EmbargoPanel extends PluginPanel {
         item.add(label);
 
         return item;
-    }
-
-    /**
-     * Adds in-progress tiles with their group details to the bingo panel
-     */
-    private void addInProgressTilesToPanel(BingoState state) {
-        // Get tiles that are partial (in progress)
-        List<BingoTile> partialTiles = new ArrayList<>();
-        for (BingoTile tile : state.getTiles().values()) {
-            BingoTeamTileProgress progress = state.getProgress(tile.getId());
-            if (progress != null && progress.getStatus() == BingoTileStatus.PARTIAL) {
-                partialTiles.add(tile);
-            }
-        }
-
-        if (partialTiles.isEmpty()) {
-            return;
-        }
-
-        bingoPanel.add(Box.createVerticalStrut(8));
-        bingoPanel.add(createSmallLabel("In Progress:", Color.WHITE));
-        bingoPanel.add(Box.createVerticalStrut(2));
-
-        // Show up to 5 partial tiles
-        int shown = 0;
-        for (BingoTile tile : partialTiles) {
-            if (shown >= 5) {
-                int remaining = partialTiles.size() - 5;
-                bingoPanel.add(createSmallLabel("  +" + remaining + " more...", COLOR_GRAY));
-                break;
-            }
-
-            BingoTeamTileProgress progress = state.getProgress(tile.getId());
-            String tileTitle = tile.getTitle();
-            if (tileTitle.length() > 20) {
-                tileTitle = tileTitle.substring(0, 17) + "...";
-            }
-
-            // For grouped tiles, show group progress
-            if (tile.getTileType() == BingoTileType.GROUPED && !tile.getItemGroups().isEmpty()) {
-                bingoPanel.add(createSmallLabel("  " + tileTitle, COLOR_YELLOW));
-                for (BingoItemGroup group : tile.getItemGroups()) {
-                    // Calculate group progress based on progress entries
-                    int groupProgress = calculateGroupProgress(state, tile, group, progress);
-                    int required = group.getRequiredCount();
-                    String groupName = group.getGroupName();
-                    if (groupName.length() > 15) {
-                        groupName = groupName.substring(0, 12) + "...";
-                    }
-                    Color progressColor = groupProgress >= required ? COLOR_GREEN : COLOR_ORANGE;
-                    bingoPanel.add(createSmallLabel("    " + groupName + ": " + groupProgress + "/" + required,
-                            progressColor));
-                }
-            } else {
-                // For quantity tiles, show count
-                int current = progress != null ? progress.getCurrentCount() : 0;
-                int required = tile.getRequiredCount();
-                String progressText = "  " + tileTitle + " (" + current + "/" + required + ")";
-                bingoPanel.add(createSmallLabel(progressText, COLOR_YELLOW));
-            }
-
-            shown++;
-        }
-    }
-
-    /**
-     * Calculates progress for a specific group within a grouped tile.
-     * This is a simplified calculation based on the current count and items in the
-     * group.
-     */
-    private int calculateGroupProgress(BingoState state, BingoTile tile, BingoItemGroup group,
-            BingoTeamTileProgress progress) {
-        // If we have detailed progress entries, we could count items per group
-        // For now, return a rough estimate based on the items in the group
-        // This would need enhancement if we want accurate per-group tracking
-        if (progress == null) {
-            return 0;
-        }
-
-        // For accurate group progress, we'd need the server to return per-group counts
-        // For now, show the overall progress divided proportionally
-        int totalItems = 0;
-        for (BingoItemGroup g : tile.getItemGroups()) {
-            totalItems += g.getRequiredCount();
-        }
-
-        if (totalItems == 0) {
-            return 0;
-        }
-
-        // Proportional estimate (not perfectly accurate but gives an indication)
-        int groupProportion = (progress.getCurrentCount() * group.getRequiredCount()) / totalItems;
-        return Math.min(groupProportion, group.getRequiredCount());
     }
 
     /**
