@@ -13,6 +13,7 @@ import net.runelite.api.widgets.Widget;
 import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.NpcLootReceived;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStack;
 import net.runelite.client.plugins.loottracker.LootReceived;
@@ -86,13 +87,34 @@ public class BingoDropDetector {
     }
 
     @Subscribe
+    public void onNpcLootReceived(NpcLootReceived event) {
+        if (!bingoManager.shouldTrackDrops()) {
+            return;
+        }
+
+        if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD) {
+            return;
+        }
+
+        String source = event.getNpc().getName();
+
+        for (ItemStack itemStack : event.getItems()) {
+            int itemId = itemStack.getId();
+
+            ItemComposition itemComp = itemManager.getItemComposition(itemId);
+            String itemName = itemComp != null ? itemComp.getName() : "Unknown";
+
+            matchAndSubmitItem(itemId, itemName, itemStack.getQuantity(), source);
+        }
+    }
+
+    @Subscribe
     public void onLootReceived(LootReceived event) {
         if (!bingoManager.shouldTrackDrops()) {
             return;
         }
 
-        LootRecordType eventType = event.getType();
-        if (eventType != LootRecordType.NPC && eventType != LootRecordType.EVENT) {
+        if (event.getType() != LootRecordType.EVENT) {
             return;
         }
 
