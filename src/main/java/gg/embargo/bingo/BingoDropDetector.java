@@ -22,6 +22,7 @@ import net.runelite.http.api.loottracker.LootRecordType;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -66,6 +67,10 @@ public class BingoDropDetector {
     private volatile String pendingClueType = null;
     private final AtomicInteger clueTicksWaited = new AtomicInteger(0);
 
+    // Tracks NPC names processed via onNpcLootReceived this tick, to avoid
+    // double-processing when onLootReceived also fires for the same kill.
+    private final Set<String> npcLootProcessedThisTick = new HashSet<>();
+
     private volatile boolean started = false;
 
     public void startUp() {
@@ -84,6 +89,7 @@ public class BingoDropDetector {
         eventBus.unregister(this);
         resetPetState();
         resetClueState();
+        npcLootProcessedThisTick.clear();
     }
 
     @Subscribe
@@ -97,6 +103,7 @@ public class BingoDropDetector {
         }
 
         String source = event.getNpc().getName();
+        npcLootProcessedThisTick.add(source);
 
         for (ItemStack itemStack : event.getItems()) {
             int itemId = itemStack.getId();
@@ -114,15 +121,18 @@ public class BingoDropDetector {
             return;
         }
 
-        if (event.getType() != LootRecordType.EVENT) {
-            return;
-        }
-
         if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD) {
             return;
         }
 
         String source = event.getName();
+
+        // Skip NPC-type loot already handled by onNpcLootReceived to avoid duplicates.
+        // Special NPCs (e.g. Whisperer, Araxxor) fire LootReceived with NPC type
+        // but NOT NpcLootReceived, so they still get processed here.
+        if (event.getType() == LootRecordType.NPC && npcLootProcessedThisTick.contains(source)) {
+            return;
+        }
 
         for (ItemStack itemStack : event.getItems()) {
             int itemId = itemStack.getId();
@@ -136,6 +146,8 @@ public class BingoDropDetector {
 
     @Subscribe
     public void onGameTick(GameTick event) {
+        npcLootProcessedThisTick.clear();
+
         if (pendingPetDrop) {
             if (pendingPetName != null) {
                 submitPetDrop(pendingPetItemId, pendingPetName);
@@ -184,10 +196,14 @@ public class BingoDropDetector {
             return;
         }
 
-        Matcher clogMatcher = COLLECTION_LOG_PATTERN.matcher(message);
-        if (clogMatcher.matches()) {
-            String itemName = clogMatcher.group(1);
-            handleCollectionLogUnlock(itemName);
+        if (pendingPetDrop) {
+            Matcher clogMatcher = COLLECTION_LOG_PATTERN.matcher(message);
+            if (clogMatcher.matches()) {
+                String itemName = clogMatcher.group(1);
+                resolvePetIdentity(itemName);
+                submitPetDrop(pendingPetItemId, pendingPetName != null ? pendingPetName : "Pet");
+                resetPetState();
+            }
         }
     }
 
@@ -296,38 +312,6 @@ public class BingoDropDetector {
                 }
 
                 bingoManager.submitDrop(state, tile.getId(), itemId, itemName, 1, "Pet Drop", false, true);
-            }
-        }
-    }
-
-    private void handleCollectionLogUnlock(String itemName) {
-        List<BingoState> trackingStates = bingoManager.getTrackingStates();
-        if (trackingStates.isEmpty()) {
-            return;
-        }
-
-        log.debug("Collection log unlock detected: {}", itemName);
-
-        if (pendingPetDrop) {
-            resolvePetIdentity(itemName);
-            submitPetDrop(pendingPetItemId, pendingPetName != null ? pendingPetName : "Pet");
-            resetPetState();
-            return;
-        }
-
-        for (BingoState state : trackingStates) {
-            for (BingoTile tile : state.getTilesByPosition()) {
-                BingoTeamTileProgress progress = state.getProgress(tile.getId());
-                if (progress != null && progress.isCompleted()) {
-                    continue;
-                }
-
-                for (BingoItemRequirement req : tile.getItemRequirements()) {
-                    if (req.getItemName() != null && req.getItemName().equalsIgnoreCase(itemName)) {
-                        bingoManager.submitDrop(state, tile.getId(), req.getItemId(), itemName, 1,
-                                "Collection Log", true, false);
-                    }
-                }
             }
         }
     }
