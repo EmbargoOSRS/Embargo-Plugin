@@ -364,7 +364,7 @@ public class BingoManager {
             int requiredCount = tile.getRequiredCount();
 
             if (currentCount < requiredCount) {
-                needsScreenshot = screenshotManager != null && !fromCollectionLog;
+                needsScreenshot = screenshotManager != null;
                 announceLocalDrop(playerName, tile.getTitle(), itemName, state.getUserTeam());
             }
         }
