@@ -289,7 +289,7 @@ public class EmbargoPanel extends PluginPanel {
         versionPanel.setLayout(new BoxLayout(versionPanel, BoxLayout.Y_AXIS));
 
         // Set up Embargo Clan Version at top of Version panel
-        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.5"));
+        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.6"));
         version.setFont(smallFont);
         version.setAlignmentX(Component.LEFT_ALIGNMENT);
 

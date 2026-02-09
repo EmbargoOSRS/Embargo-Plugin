@@ -32,7 +32,6 @@ public class BingoManager {
     private static final String API_BASE = "https://embargo.gg/api/";
     private static final String BINGO_ACTIVE_ENDPOINT = API_BASE + "bingo/plugin/active";
     private static final String BINGO_DROP_ENDPOINT = API_BASE + "bingo/plugin/drop";
-    private static final String BINGO_SCREENSHOT_ENDPOINT = API_BASE + "bingo/plugin/screenshot";
     private static final String BINGO_COMPLETIONS_ENDPOINT = API_BASE + "bingo/plugin/completions";
     private static final String BINGO_TRACKING_DISABLED_ENDPOINT = API_BASE + "bingo/plugin/tracking-disabled";
 
@@ -357,7 +356,20 @@ public class BingoManager {
         }
         String playerName = client.getLocalPlayer().getName();
 
-        BingoDropSubmission submission = BingoDropSubmission.builder()
+        BingoTile tile = state.getTile(tileId);
+        boolean needsScreenshot = false;
+        if (tile != null) {
+            BingoTeamTileProgress progress = state.getProgress(tileId);
+            int currentCount = progress != null ? progress.getCurrentCount() : 0;
+            int requiredCount = tile.getRequiredCount();
+
+            if (currentCount < requiredCount) {
+                needsScreenshot = screenshotManager != null && !fromCollectionLog;
+                announceLocalDrop(playerName, tile.getTitle(), itemName, state.getUserTeam());
+            }
+        }
+
+        BingoDropSubmission.BingoDropSubmissionBuilder builder = BingoDropSubmission.builder()
                 .bingoBoardId(state.getId())
                 .tileId(tileId)
                 .playerName(playerName)
@@ -367,24 +379,14 @@ public class BingoManager {
                 .source(source)
                 .fromCollectionLog(fromCollectionLog)
                 .isPet(isPet)
-                .world(client.getWorld())
-                .build();
+                .world(client.getWorld());
 
-        submitDropAsync(submission);
-
-        BingoTile tile = state.getTile(tileId);
-        if (tile != null) {
-            BingoTeamTileProgress progress = state.getProgress(tileId);
-            int currentCount = progress != null ? progress.getCurrentCount() : 0;
-            int requiredCount = tile.getRequiredCount();
-
-            if (currentCount < requiredCount) {
-                if (screenshotManager != null && !fromCollectionLog) {
-                    screenshotManager.captureAndUpload(state.getId(), tileId, itemId, itemName);
-                }
-
-                announceLocalDrop(playerName, tile.getTitle(), itemName, state.getUserTeam());
-            }
+        if (needsScreenshot) {
+            screenshotManager.captureBase64(base64 -> {
+                submitDropAsync(builder.screenshotBase64(base64).build());
+            });
+        } else {
+            submitDropAsync(builder.build());
         }
     }
 

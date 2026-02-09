@@ -23,6 +23,7 @@ import java.util.Base64;
 import java.util.Iterator;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 @Slf4j
 @Singleton
@@ -86,6 +87,26 @@ public class BingoScreenshotManager {
 
         pendingScreenshots.clear();
         log.debug("BingoScreenshotManager shut down");
+    }
+
+    public void captureBase64(Consumer<String> callback) {
+        if (!started.get() || uploadExecutor == null) {
+            callback.accept(null);
+            return;
+        }
+
+        if (client == null || client.getLocalPlayer() == null) {
+            callback.accept(null);
+            return;
+        }
+
+        drawManager.requestNextFrameListener(image -> {
+            BufferedImage screenshot = (BufferedImage) image;
+            uploadExecutor.submit(() -> {
+                String base64 = toBase64(screenshot);
+                callback.accept(base64);
+            });
+        });
     }
 
     public void captureAndUpload(int boardId, int tileId, int itemId, String itemName) {
