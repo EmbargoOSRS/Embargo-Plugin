@@ -22,8 +22,9 @@ import net.runelite.http.api.loottracker.LootRecordType;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -67,9 +68,11 @@ public class BingoDropDetector {
     private volatile String pendingClueType = null;
     private final AtomicInteger clueTicksWaited = new AtomicInteger(0);
 
-    // Tracks NPC names processed via onNpcLootReceived this tick, to avoid
-    // double-processing when onLootReceived also fires for the same kill.
-    private final Set<String> npcLootProcessedThisTick = new HashSet<>();
+    // Tracks NPC names processed via onNpcLootReceived with the tick they were added,
+    // to avoid double-processing when onLootReceived also fires for the same kill.
+    // Entries persist for 3 ticks to handle cases where onGameTick fires between the two events.
+    private final Map<String, Integer> npcLootProcessedTicks = new HashMap<>();
+    private int tickCounter = 0;
 
     private volatile boolean started = false;
 
@@ -89,7 +92,7 @@ public class BingoDropDetector {
         eventBus.unregister(this);
         resetPetState();
         resetClueState();
-        npcLootProcessedThisTick.clear();
+        npcLootProcessedTicks.clear();
     }
 
     @Subscribe
@@ -103,7 +106,7 @@ public class BingoDropDetector {
         }
 
         String source = event.getNpc().getName();
-        npcLootProcessedThisTick.add(source);
+        npcLootProcessedTicks.put(source, tickCounter);
 
         for (ItemStack itemStack : event.getItems()) {
             int itemId = itemStack.getId();
@@ -130,7 +133,7 @@ public class BingoDropDetector {
         // Skip NPC-type loot already handled by onNpcLootReceived to avoid duplicates.
         // Special NPCs (e.g. Whisperer, Araxxor) fire LootReceived with NPC type
         // but NOT NpcLootReceived, so they still get processed here.
-        if (event.getType() == LootRecordType.NPC && npcLootProcessedThisTick.contains(source)) {
+        if (event.getType() == LootRecordType.NPC && npcLootProcessedTicks.containsKey(source)) {
             return;
         }
 
@@ -146,7 +149,8 @@ public class BingoDropDetector {
 
     @Subscribe
     public void onGameTick(GameTick event) {
-        npcLootProcessedThisTick.clear();
+        tickCounter++;
+        npcLootProcessedTicks.entrySet().removeIf(e -> tickCounter - e.getValue() > 2);
 
         if (pendingPetDrop) {
             if (pendingPetName != null) {

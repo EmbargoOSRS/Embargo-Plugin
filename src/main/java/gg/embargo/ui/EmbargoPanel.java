@@ -148,6 +148,9 @@ public class EmbargoPanel extends PluginPanel {
     // Stored reference to allow removal on shutdown
     private Consumer<List<BingoState>> bingoStateChangeListener;
 
+    // Profile link mouse adapter for loggedLabel (added on login, removed on logout)
+    private MouseAdapter profileLinkAdapter;
+
     // Periodic refresh for events/bounties/polls
     private static final int EVENTS_REFRESH_INTERVAL_MINUTES = 1;
     private ScheduledFuture<?> eventsRefreshTask;
@@ -224,15 +227,28 @@ public class EmbargoPanel extends PluginPanel {
         // Use a light blue color for links to indicate clickability
         final Color linkColor = new Color(0x5D, 0x9C, 0xEC);
 
-        // Only apply link color to non-HTML labels (HTML labels have their own styling)
+        // Append link symbol (🔗) to indicate an outgoing link
         String text = label.getText();
         boolean isHtml = text != null && text.toLowerCase().startsWith("<html>");
-        if (!isHtml) {
+        if (isHtml) {
+            // Insert link symbol before closing </body> or </html> tag
+            String lowerText = text.toLowerCase();
+            int insertPos = lowerText.indexOf("</body>");
+            if (insertPos == -1) {
+                insertPos = lowerText.indexOf("</html>");
+            }
+            if (insertPos != -1) {
+                label.setText(text.substring(0, insertPos) + " \uD83D\uDD17" + text.substring(insertPos));
+            } else {
+                label.setText(text + " \uD83D\uDD17");
+            }
+        } else {
+            label.setText(text + " \uD83D\uDD17");
             label.setForeground(linkColor);
         }
 
-        // Use label's foreground color for underline, or link color for HTML labels
-        final Color underlineColor = isHtml ? Color.WHITE : linkColor;
+        // Constrain label width so the underline border matches the text, not the panel
+        label.setMaximumSize(label.getPreferredSize());
 
         label.addMouseListener(new MouseAdapter() {
             @Override
@@ -242,13 +258,11 @@ public class EmbargoPanel extends PluginPanel {
 
             @Override
             public void mouseEntered(MouseEvent e) {
-                // Add underline border on hover
-                label.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, underlineColor));
+                label.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, linkColor));
             }
 
             @Override
             public void mouseExited(MouseEvent e) {
-                // Remove underline border
                 label.setBorder(null);
             }
         });
@@ -289,7 +303,7 @@ public class EmbargoPanel extends PluginPanel {
         versionPanel.setLayout(new BoxLayout(versionPanel, BoxLayout.Y_AXIS));
 
         // Set up Embargo Clan Version at top of Version panel
-        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.6"));
+        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.7"));
         version.setFont(smallFont);
         version.setAlignmentX(Component.LEFT_ALIGNMENT);
 
@@ -305,6 +319,30 @@ public class EmbargoPanel extends PluginPanel {
         versionPanel.add(version);
         versionPanel.add(Box.createVerticalStrut(4));
         versionPanel.add(loggedLabel);
+
+        // Create profile link adapter (attached on login, removed on logout)
+        final Color profileLinkColor = new Color(0x5D, 0x9C, 0xEC);
+        profileLinkAdapter = new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (client != null && client.getLocalPlayer() != null) {
+                    String name = client.getLocalPlayer().getName();
+                    if (name != null && !name.isEmpty()) {
+                        LinkBrowser.browse("https://embargo.gg/profile/" + name);
+                    }
+                }
+            }
+
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                loggedLabel.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, profileLinkColor));
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                loggedLabel.setBorder(null);
+            }
+        };
 
         // Create logged out section (shown when not logged in)
         loggedOutSection = new JPanel();
@@ -1024,7 +1062,7 @@ public class EmbargoPanel extends PluginPanel {
         }
 
         // Bingo name with status - "Event Name - Active"
-        JLabel nameLabel = new JLabel("<html><body style='color:white'>" + bingoName +
+        JLabel nameLabel = new JLabel("<html><body style='color:#5D9CEC'>" + bingoName +
                 " - <span style='color:#00ff00'>Active</span></body></html>");
         nameLabel.setFont(smallFont);
         nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -1519,7 +1557,15 @@ public class EmbargoPanel extends PluginPanel {
                 boolean isFirstLogin = !this.isLoggedIn;
                 this.isLoggedIn = true;
 
-                loggedLabel.setText(htmlLabel("Signed in as ", " " + username));
+                loggedLabel.setText("<html><body style='color:#a5a5a5'>Signed in as " +
+                        "<span style='color:#5D9CEC'> " + username + " \uD83D\uDD17</span></body></html>");
+                loggedLabel.setMaximumSize(loggedLabel.getPreferredSize());
+
+                if (isFirstLogin) {
+                    loggedLabel.setCursor(new Cursor(Cursor.HAND_CURSOR));
+                    loggedLabel.setToolTipText("Click to view profile on embargo.gg");
+                    loggedLabel.addMouseListener(profileLinkAdapter);
+                }
 
                 dataManager.isUserRegisteredAsync(username, isRegistered -> {
                     if (!isRegistered) {
@@ -1720,6 +1766,11 @@ public class EmbargoPanel extends PluginPanel {
         emailLabel.setContentType("text/html");
         emailLabel.setText("Sign in to send data to Embargo.");
         loggedLabel.setText("Not signed in");
+        loggedLabel.setCursor(Cursor.getDefaultCursor());
+        loggedLabel.setToolTipText(null);
+        loggedLabel.setBorder(null);
+        loggedLabel.setMaximumSize(null);
+        loggedLabel.removeMouseListener(profileLinkAdapter);
 
         // Toggle section visibility
         loggedOutSection.setVisible(true);
