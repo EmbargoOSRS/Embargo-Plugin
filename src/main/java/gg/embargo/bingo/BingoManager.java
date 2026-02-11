@@ -369,6 +369,10 @@ public class BingoManager {
             }
         }
 
+        if (isPet && screenshotManager != null) {
+            needsScreenshot = true;
+        }
+
         BingoDropSubmission.BingoDropSubmissionBuilder builder = BingoDropSubmission.builder()
                 .bingoBoardId(state.getId())
                 .tileId(tileId)
