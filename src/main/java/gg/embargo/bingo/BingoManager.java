@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.callback.ClientThread;
 import okhttp3.*;
 
@@ -357,21 +358,17 @@ public class BingoManager {
         String playerName = client.getLocalPlayer().getName();
 
         BingoTile tile = state.getTile(tileId);
-        boolean needsScreenshot = false;
         if (tile != null) {
             BingoTeamTileProgress progress = state.getProgress(tileId);
             int currentCount = progress != null ? progress.getCurrentCount() : 0;
             int requiredCount = tile.getRequiredCount();
 
             if (currentCount < requiredCount) {
-                needsScreenshot = screenshotManager != null;
                 announceLocalDrop(playerName, tile.getTitle(), itemName, state.getUserTeam());
             }
         }
 
-        if (isPet && screenshotManager != null) {
-            needsScreenshot = true;
-        }
+        boolean needsScreenshot = screenshotManager != null;
 
         BingoDropSubmission.BingoDropSubmissionBuilder builder = BingoDropSubmission.builder()
                 .bingoBoardId(state.getId())
@@ -647,6 +644,47 @@ public class BingoManager {
                         "",
                         message,
                         null);
+            }
+
+            // Check required game settings for accurate bingo tracking
+            List<String> missingSettings = new ArrayList<>();
+
+            if (client.getVarbitValue(VarbitID.OPTION_COLLECTION_NEW_ITEM) == 0) {
+                missingSettings.add("Collection log - New addition notification");
+            }
+            if (client.getVarbitValue(VarbitID.OPTION_LOOTNOTIFICATION_ON) != 1) {
+                missingSettings.add("Loot drop notifications");
+            }
+            if (client.getVarbitValue(VarbitID.OPTION_LOOTNOTIFICATION_UNTRADEABLES) != 1) {
+                missingSettings.add("Untradeable loot notifications");
+            }
+            // CA_TASK_POPUP: 0 = enabled, 1 = disabled
+            if (client.getVarbitValue(VarbitID.CA_TASK_POPUP) != 0) {
+                missingSettings.add("Combat Achievement Tasks - Completion popup");
+            }
+            if (client.getVarbitValue(VarbitID.CA_FAILURE_NOTIFICATIONS_ENABLED) != 1) {
+                missingSettings.add("Combat Achievement Tasks - Failure");
+            }
+            if (client.getVarbitValue(VarbitID.CA_REFAILURE_NOTIFICATIONS_ENABLED) != 1) {
+                missingSettings.add("Combat Achievement Tasks - Repeat failure");
+            }
+            if (client.getVarbitValue(VarbitID.CA_TASK_RECOMPLETION_NOTIFICATIONS) != 1) {
+                missingSettings.add("Combat Achievement Tasks - Repeat completion");
+            }
+
+            if (!missingSettings.isEmpty()) {
+                client.addChatMessage(
+                        ChatMessageType.GAMEMESSAGE,
+                        "",
+                        tag + " <col=ff0000>Warning:</col> Please enable the following in your game settings for accurate bingo tracking:",
+                        null);
+                for (String setting : missingSettings) {
+                    client.addChatMessage(
+                            ChatMessageType.GAMEMESSAGE,
+                            "",
+                            tag + "  - <col=ffffff>" + setting + "</col>",
+                            null);
+                }
             }
         });
     }
