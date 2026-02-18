@@ -45,6 +45,7 @@ import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -328,7 +329,7 @@ public class EmbargoPanel extends PluginPanel {
                 if (client != null && client.getLocalPlayer() != null) {
                     String name = client.getLocalPlayer().getName();
                     if (name != null && !name.isEmpty()) {
-                        LinkBrowser.browse("https://embargo.gg/profile/" + name);
+                        LinkBrowser.browse(new URI("https", "embargo.gg", "/profile/" + name, null).toASCIIString());
                     }
                 }
             }
