@@ -658,19 +658,6 @@ public class BingoManager {
             if (client.getVarbitValue(VarbitID.OPTION_LOOTNOTIFICATION_UNTRADEABLES) != 1) {
                 missingSettings.add("Untradeable loot notifications");
             }
-            // CA_TASK_POPUP: 0 = enabled, 1 = disabled
-            if (client.getVarbitValue(VarbitID.CA_TASK_POPUP) != 0) {
-                missingSettings.add("Combat Achievement Tasks - Completion popup");
-            }
-            if (client.getVarbitValue(VarbitID.CA_FAILURE_NOTIFICATIONS_ENABLED) != 1) {
-                missingSettings.add("Combat Achievement Tasks - Failure");
-            }
-            if (client.getVarbitValue(VarbitID.CA_REFAILURE_NOTIFICATIONS_ENABLED) != 1) {
-                missingSettings.add("Combat Achievement Tasks - Repeat failure");
-            }
-            if (client.getVarbitValue(VarbitID.CA_TASK_RECOMPLETION_NOTIFICATIONS) != 1) {
-                missingSettings.add("Combat Achievement Tasks - Repeat completion");
-            }
 
             if (!missingSettings.isEmpty()) {
                 client.addChatMessage(
