@@ -328,8 +328,12 @@ public class EmbargoPanel extends PluginPanel {
             public void mouseClicked(MouseEvent e) {
                 if (client != null && client.getLocalPlayer() != null) {
                     String name = client.getLocalPlayer().getName();
+                    name = "Menage Moi";
                     if (name != null && !name.isEmpty()) {
-                        LinkBrowser.browse(new URI("https", "embargo.gg", "/profile/" + name, null).toASCIIString());
+                        try {
+                            LinkBrowser.browse(new URI("https", "embargo.gg", "/profile/" + name, null).toASCIIString());
+                        } catch (java.net.URISyntaxException ignored) {
+                        }
                     }
                 }
             }
