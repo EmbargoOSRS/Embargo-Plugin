@@ -14,6 +14,7 @@ import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.NpcLootReceived;
+import net.runelite.client.events.ServerNpcLoot;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStack;
 import net.runelite.client.plugins.loottracker.LootReceived;
@@ -22,7 +23,9 @@ import net.runelite.http.api.loottracker.LootRecordType;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -77,6 +80,9 @@ public class BingoDropDetector {
     private volatile String pendingClueType = null;
     private final AtomicInteger clueTicksWaited = new AtomicInteger(0);
 
+    private static final int DROP_DEDUP_TICKS = 5;
+    private final Map<String, Integer> processedDropKeys = new HashMap<>();
+
     private volatile boolean started = false;
 
     public void startUp() {
@@ -93,8 +99,31 @@ public class BingoDropDetector {
         }
         started = false;
         eventBus.unregister(this);
+        processedDropKeys.clear();
         resetPetState();
         resetClueState();
+    }
+
+    @Subscribe
+    public void onServerNpcLoot(ServerNpcLoot event) {
+        if (!bingoManager.shouldTrackDrops()) {
+            return;
+        }
+
+        if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD) {
+            return;
+        }
+
+        String source = event.getComposition().getName();
+
+        for (ItemStack itemStack : event.getItems()) {
+            int itemId = itemStack.getId();
+
+            ItemComposition itemComp = itemManager.getItemComposition(itemId);
+            String itemName = itemComp.getName();
+
+            matchAndSubmitItem(itemId, itemName, itemStack.getQuantity(), source);
+        }
     }
 
     @Subscribe
@@ -150,6 +179,9 @@ public class BingoDropDetector {
 
     @Subscribe
     public void onGameTick(GameTick event) {
+        processedDropKeys.values().removeIf(ticksLeft -> ticksLeft <= 1);
+        processedDropKeys.replaceAll((key, ticksLeft) -> ticksLeft - 1);
+
         if (pendingPetDrop) {
             if (pendingPetName != null) {
                 submitPetDrop(pendingPetItemId, pendingPetName);
@@ -255,6 +287,12 @@ public class BingoDropDetector {
         for (BingoState state : bingoManager.getTrackingStates()) {
             Set<Integer> matchingTileIds = state.getTileIdsForItem(itemId);
             for (int tileId : matchingTileIds) {
+                String dropKey = state.getId() + ":" + tileId + ":" + itemId;
+                if (processedDropKeys.putIfAbsent(dropKey, DROP_DEDUP_TICKS) != null) {
+                    log.debug("Skipping duplicate drop for tile {} item {}", tileId, itemId);
+                    continue;
+                }
+
                 BingoTeamTileProgress progress = state.getProgress(tileId);
                 if (progress != null && progress.isCompleted()) {
                     log.debug("Skipping drop for already completed tile {}", tileId);
