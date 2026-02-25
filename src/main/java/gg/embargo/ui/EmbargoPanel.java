@@ -304,7 +304,7 @@ public class EmbargoPanel extends PluginPanel {
         versionPanel.setLayout(new BoxLayout(versionPanel, BoxLayout.Y_AXIS));
 
         // Set up Embargo Clan Version at top of Version panel
-        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.5.9"));
+        JLabel version = new JLabel(htmlLabel("Embargo Clan Version: ", "1.6.0"));
         version.setFont(smallFont);
         version.setAlignmentX(Component.LEFT_ALIGNMENT);
 
@@ -986,6 +986,140 @@ public class EmbargoPanel extends PluginPanel {
     }
 
     /**
+     * Fetches profile/gear data from the API and updates scores, rank, and missing requirements
+     */
+    private void fetchAndUpdateProfile(String username) {
+        dataManager.getProfileAsync(username, false).thenAcceptAsync(embargoProfileData -> {
+            if (embargoProfileData == null) {
+                return;
+            }
+
+            JsonElement currentAccountPoints = embargoProfileData.get("accountPoints");
+            JsonElement currentCommunityPoints = embargoProfileData.get("communityPoints");
+
+            final int accountPoints = (currentAccountPoints != null && !currentAccountPoints.isJsonNull())
+                    ? currentAccountPoints.getAsInt()
+                    : 0;
+            final int communityPoints = (currentCommunityPoints != null && !currentCommunityPoints.isJsonNull())
+                    ? currentCommunityPoints.getAsInt()
+                    : 0;
+
+            JsonElement getCurrentCAName = embargoProfileData.get("currentHighestCAName");
+            JsonObject currentRank = embargoProfileData.getAsJsonObject("currentRank");
+
+            final String currentRankDisplay;
+            if (currentRank != null) {
+                JsonElement currentRankName = currentRank.get("name");
+                if (currentRankName != null && !currentRankName.isJsonNull()) {
+                    currentRankDisplay = currentRankName.getAsString();
+                } else {
+                    currentRankDisplay = "N/A";
+                }
+            } else {
+                currentRankDisplay = "N/A";
+            }
+
+            final String displayCAName;
+            if (getCurrentCAName != null && !getCurrentCAName.isJsonNull()) {
+                displayCAName = getCurrentCAName.getAsString().replace(" Combat Achievement", "");
+            } else {
+                displayCAName = "N/A";
+            }
+
+            JsonArray missingGearReqs = embargoProfileData.getAsJsonArray("missingGearRequirements");
+            JsonArray missingUntradableItemIdReqs = embargoProfileData
+                    .getAsJsonArray("missingUntradableItemIds");
+
+            SwingUtilities.invokeLater(() -> {
+                embargoScoreLabel.setText(htmlLabel("Embargo Score:", " " + (accountPoints + communityPoints)));
+                accountScoreLabel.setText(htmlLabel("Account Score:", " " + accountPoints));
+                communityScoreLabel.setText(htmlLabel("Community Score:", " " + communityPoints));
+                currentRankLabel.setText(htmlLabel("Current Rank:", " " + currentRankDisplay));
+                currentCALabel.setText(htmlLabel("Current CA Tier:", " " + displayCAName));
+            });
+
+            ArrayList<String> alreadyProcessed = new ArrayList<>();
+
+            if (missingGearReqs.size() > 0 || missingUntradableItemIdReqs.size() > 0) {
+                List<Object[]> dynamicItemsData = new ArrayList<>();
+                List<Object[]> regularItemsData = new ArrayList<>();
+
+                for (JsonElement mi : missingGearReqs) {
+                    String itemName = mi.getAsString();
+                    alreadyProcessed.add(itemName);
+                    log.debug("Processing {} in missingGearReqs", itemName);
+
+                    if (itemName.contains("|")) {
+                        String[] dynamicNames = itemName.split("\\|");
+                        int[] itemIds = new int[dynamicNames.length];
+                        for (int i = 0; i < dynamicNames.length; i++) {
+                            itemIds[i] = missingRequirementsComponent
+                                    .findItemIdByName(dynamicNames[i].trim());
+                        }
+                        dynamicItemsData.add(new Object[] { dynamicNames, itemIds });
+                    } else {
+                        int itemId = missingRequirementsComponent.findItemIdByName(itemName);
+                        regularItemsData.add(new Object[] { itemName, itemId });
+                    }
+                }
+
+                List<Integer> untradableIds = new ArrayList<>();
+                for (JsonElement mu : missingUntradableItemIdReqs) {
+                    if (alreadyProcessed.contains(mu.getAsString())) {
+                        log.debug("{} already added, skipping missingUntradableItemIdReqs",
+                                mu.getAsString());
+                        continue;
+                    }
+                    untradableIds.add(mu.getAsInt());
+                }
+
+                clientThread.invokeLater(() -> {
+                    missingRequirementsComponent.beginBatchUpdate();
+
+                    try {
+                        for (Object[] data : dynamicItemsData) {
+                            String[] names = (String[]) data[0];
+                            int[] ids = (int[]) data[1];
+                            missingRequirementsComponent.addDynamicMissingItem(names, ids, 3000);
+                        }
+
+                        for (Object[] data : regularItemsData) {
+                            String name = (String) data[0];
+                            int id = (int) data[1];
+                            missingRequirementsComponent.addMissingItem(name, id);
+                        }
+
+                        for (int itemId : untradableIds) {
+                            missingRequirementsComponent.addMissingItem("", itemId);
+                        }
+                    } finally {
+                        missingRequirementsComponent.endBatchUpdate();
+                    }
+
+                    SwingUtilities.invokeLater(() -> {
+                        missingRequirementsPanel.removeAll();
+                        missingRequirementsPanel.add(missingRequirementsComponent);
+                        missingRequirementsPanel.revalidate();
+                        missingRequirementsPanel.repaint();
+
+                        int totalItems = dynamicItemsData.size() + regularItemsData.size()
+                                + untradableIds.size();
+                        updateMissingItemCount(totalItems);
+                    });
+                });
+            } else {
+                SwingUtilities.invokeLater(() -> {
+                    missingRequiredItemsLabel.setText(htmlLabel("Missing Requirements: ", "None"));
+                    updateMissingItemCount(0);
+                });
+            }
+        }, executorService).exceptionally(ex -> {
+            log.error("Error fetching profile data", ex);
+            return null;
+        });
+    }
+
+    /**
      * Fetches bingo state and updates the panel
      */
     private void fetchAndUpdateBingo() {
@@ -1460,13 +1594,23 @@ public class EmbargoPanel extends PluginPanel {
         missingRequirementsComponent.clearItems();
         updateMissingItemCount(0);
 
-        // Stagger API calls to avoid network burst on manual refresh
-        fetchAndUpdateEvents();
-        executorService.schedule(this::fetchAndUpdateBounties, 100, TimeUnit.MILLISECONDS);
-        executorService.schedule(this::fetchAndUpdateBingo, 200, TimeUnit.MILLISECONDS);
+        String username = client.getLocalPlayer().getName();
 
-        // Force refresh by calling updateLoggedIn with scheduled=true
-        updateLoggedIn(true);
+        // Re-check registration status in case user registered mid-session
+        dataManager.isUserRegisteredAsync(username, isRegistered -> {
+            if (!isRegistered) {
+                emailLabel.setText("Account not registered with Embargo");
+                return;
+            }
+
+            isRegisteredWithClanLabel.setText(htmlLabel("Account registered:", " Yes"));
+
+            // Stagger API calls to avoid network burst on manual refresh
+            fetchAndUpdateEvents();
+            executorService.schedule(this::fetchAndUpdateBounties, 100, TimeUnit.MILLISECONDS);
+            executorService.schedule(this::fetchAndUpdateBingo, 200, TimeUnit.MILLISECONDS);
+            executorService.schedule(() -> fetchAndUpdateProfile(username), 300, TimeUnit.MILLISECONDS);
+        });
     }
 
     /**
@@ -1604,150 +1748,7 @@ public class EmbargoPanel extends PluginPanel {
                 isRegisteredWithClanLabel.setText(htmlLabel("Account registered:", " Yes"));
 
                 // get gear asynchronously
-                dataManager.getProfileAsync(username, false).thenAcceptAsync(embargoProfileData -> {
-                    // This code runs on a background thread - do all JSON parsing here
-                    if (embargoProfileData == null) {
-                        return;
-                    }
-
-                    // Parse all JSON data on background thread
-                    JsonElement currentAccountPoints = embargoProfileData.get("accountPoints");
-                    JsonElement currentCommunityPoints = embargoProfileData.get("communityPoints");
-
-                    final int accountPoints = (currentAccountPoints != null && !currentAccountPoints.isJsonNull())
-                            ? currentAccountPoints.getAsInt()
-                            : 0;
-                    final int communityPoints = (currentCommunityPoints != null && !currentCommunityPoints.isJsonNull())
-                            ? currentCommunityPoints.getAsInt()
-                            : 0;
-
-                    JsonElement getCurrentCAName = embargoProfileData.get("currentHighestCAName");
-                    JsonObject currentRank = embargoProfileData.getAsJsonObject("currentRank");
-
-                    final String currentRankDisplay;
-                    if (currentRank != null) {
-                        JsonElement currentRankName = currentRank.get("name");
-                        if (currentRankName != null && !currentRankName.isJsonNull()) {
-                            currentRankDisplay = currentRankName.getAsString();
-                        } else {
-                            currentRankDisplay = "N/A";
-                        }
-                    } else {
-                        currentRankDisplay = "N/A";
-                    }
-
-                    final String displayCAName;
-                    if (getCurrentCAName != null && !getCurrentCAName.isJsonNull()) {
-                        displayCAName = getCurrentCAName.getAsString().replace(" Combat Achievement", "");
-                    } else {
-                        displayCAName = "N/A";
-                    }
-
-                    JsonArray missingGearReqs = embargoProfileData.getAsJsonArray("missingGearRequirements");
-                    JsonArray missingUntradableItemIdReqs = embargoProfileData
-                            .getAsJsonArray("missingUntradableItemIds");
-
-                    // Update simple labels on EDT (no game thread needed for Swing)
-                    SwingUtilities.invokeLater(() -> {
-                        embargoScoreLabel.setText(htmlLabel("Embargo Score:", " " + (accountPoints + communityPoints)));
-                        accountScoreLabel.setText(htmlLabel("Account Score:", " " + accountPoints));
-                        communityScoreLabel.setText(htmlLabel("Community Score:", " " + communityPoints));
-                        currentRankLabel.setText(htmlLabel("Current Rank:", " " + currentRankDisplay));
-                        currentCALabel.setText(htmlLabel("Current CA Tier:", " " + displayCAName));
-                    });
-
-                    ArrayList<String> alreadyProcessed = new ArrayList<>();
-
-                    // Build out the missing requirements panel
-                    if (missingGearReqs.size() > 0 || missingUntradableItemIdReqs.size() > 0) {
-                        // Already on background thread, do item ID lookups here
-                        List<Object[]> dynamicItemsData = new ArrayList<>();
-                        List<Object[]> regularItemsData = new ArrayList<>();
-
-                        for (JsonElement mi : missingGearReqs) {
-                            String itemName = mi.getAsString();
-                            alreadyProcessed.add(itemName);
-                            log.debug("Processing {} in missingGearReqs", itemName);
-
-                            if (itemName.contains("|")) {
-                                // DynamicMissingItem: pre-resolve all item IDs
-                                String[] dynamicNames = itemName.split("\\|");
-                                int[] itemIds = new int[dynamicNames.length];
-                                for (int i = 0; i < dynamicNames.length; i++) {
-                                    itemIds[i] = missingRequirementsComponent
-                                            .findItemIdByName(dynamicNames[i].trim());
-                                }
-                                dynamicItemsData.add(new Object[] { dynamicNames, itemIds });
-                            } else {
-                                // Regular item: pre-resolve item ID
-                                int itemId = missingRequirementsComponent.findItemIdByName(itemName);
-                                regularItemsData.add(new Object[] { itemName, itemId });
-                            }
-                        }
-
-                        List<Integer> untradableIds = new ArrayList<>();
-                        for (JsonElement mu : missingUntradableItemIdReqs) {
-                            if (alreadyProcessed.contains(mu.getAsString())) {
-                                log.debug("{} already added, skipping missingUntradableItemIdReqs",
-                                        mu.getAsString());
-                                continue;
-                            }
-                            untradableIds.add(mu.getAsInt());
-                        }
-
-                        // Use clientThread for item additions since they may load images via
-                        // ItemManager
-                        clientThread.invokeLater(() -> {
-                            // Begin batching to prevent multiple panel rebuilds
-                            missingRequirementsComponent.beginBatchUpdate();
-
-                            try {
-                                // Add all dynamic items
-                                for (Object[] data : dynamicItemsData) {
-                                    String[] names = (String[]) data[0];
-                                    int[] ids = (int[]) data[1];
-                                    missingRequirementsComponent.addDynamicMissingItem(names, ids, 3000);
-                                }
-
-                                // Add all regular items
-                                for (Object[] data : regularItemsData) {
-                                    String name = (String) data[0];
-                                    int id = (int) data[1];
-                                    missingRequirementsComponent.addMissingItem(name, id);
-                                }
-
-                                // Add untradable items
-                                for (int itemId : untradableIds) {
-                                    missingRequirementsComponent.addMissingItem("", itemId);
-                                }
-                            } finally {
-                                // End batching - this triggers a single panel rebuild
-                                missingRequirementsComponent.endBatchUpdate();
-                            }
-
-                            // Update the container panel on EDT
-                            SwingUtilities.invokeLater(() -> {
-                                missingRequirementsPanel.removeAll();
-                                missingRequirementsPanel.add(missingRequirementsComponent);
-                                missingRequirementsPanel.revalidate();
-                                missingRequirementsPanel.repaint();
-
-                                // Update item count
-                                int totalItems = dynamicItemsData.size() + regularItemsData.size()
-                                        + untradableIds.size();
-                                updateMissingItemCount(totalItems);
-                            });
-                        });
-                    } else {
-                        SwingUtilities.invokeLater(() -> {
-                            missingRequiredItemsLabel.setText(htmlLabel("Missing Requirements: ", "None"));
-                            updateMissingItemCount(0);
-                        });
-                    }
-                }, executorService).exceptionally(ex -> {
-                    log.error("Error fetching profile data", ex);
-                    return null;
-                });
+                fetchAndUpdateProfile(username);
             }
         }
     }

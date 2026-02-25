@@ -259,6 +259,13 @@ public class EmbargoPlugin extends Plugin {
 				return false;
 			}
 
+			// Load all tracked varbits/varps/skills on login if on a standard world
+			if (RuneScapeProfileType.getCurrent(client) == RuneScapeProfileType.STANDARD
+					&& dataManager.getVarbitsToCheck() != null && dataManager.getVarpsToCheck() != null) {
+				dataManager.loadInitialData();
+				lastProfile = RuneScapeProfileType.getCurrent(client);
+			}
+
 			if (isUsernameRegistered.get()) {
 				embargoPanel.updateLoggedIn(true);
 
@@ -319,6 +326,9 @@ public class EmbargoPlugin extends Plugin {
 
 		// Clear data in DataManager to ensure complete reset
 		dataManager.clearData();
+
+		// Reset profile so loadInitialData runs again on next login
+		lastProfile = null;
 
 		// Reset skill cache
 		skillLevelCache.clear();
@@ -452,10 +462,11 @@ public class EmbargoPlugin extends Plugin {
 		boolean dataAvailable = dataManager.getVarbitsToCheck() != null && dataManager.getVarpsToCheck() != null;
 		boolean isLoggedIn = client.getGameState() == GameState.LOGGED_IN;
 
+		lastProfile = currentProfile;
+
 		if (profileChanged && dataAvailable && isLoggedIn) {
 			// Profile change, we should clear the dataManager and do a new initial dump
 			log.debug("Profile changed to standard. Reloading all data and updating profile");
-			lastProfile = currentProfile;
 			dataManager.clearData();
 			dataManager.loadInitialData();
 		}
