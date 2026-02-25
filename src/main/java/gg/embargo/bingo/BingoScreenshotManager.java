@@ -3,8 +3,12 @@ package gg.embargo.bingo;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import gg.embargo.ChatPrivacyMode;
+import gg.embargo.EmbargoConfig;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.ui.DrawManager;
 import okhttp3.*;
@@ -55,6 +59,9 @@ public class BingoScreenshotManager {
     @Inject
     private BingoManager bingoManager;
 
+    @Inject
+    private EmbargoConfig config;
+
     private final AtomicBoolean started = new AtomicBoolean(false);
     private ExecutorService uploadExecutor;
     private final Semaphore uploadSemaphore = new Semaphore(MAX_CONCURRENT_UPLOADS);
@@ -100,7 +107,14 @@ public class BingoScreenshotManager {
             return;
         }
 
+        ChatPrivacyMode privacyMode = config.bingoChatPrivacy();
+        boolean chatHidden = hideWidget(privacyMode == ChatPrivacyMode.HIDE_ALL, InterfaceID.Chatbox.CHATAREA);
+        boolean pmHidden = hideWidget(privacyMode != ChatPrivacyMode.HIDE_NONE, InterfaceID.PmChat.CONTAINER);
+
         drawManager.requestNextFrameListener(image -> {
+            unhideWidget(chatHidden, InterfaceID.Chatbox.CHATAREA);
+            unhideWidget(pmHidden, InterfaceID.PmChat.CONTAINER);
+
             BufferedImage screenshot = (BufferedImage) image;
             uploadExecutor.submit(() -> {
                 String base64 = toBase64(screenshot);
@@ -124,7 +138,14 @@ public class BingoScreenshotManager {
 
         log.debug("Queuing screenshot capture for tile {} ({}) on board {}", tileId, itemName, boardId);
 
+        ChatPrivacyMode privacyMode = config.bingoChatPrivacy();
+        boolean chatHidden = hideWidget(privacyMode == ChatPrivacyMode.HIDE_ALL, InterfaceID.Chatbox.CHATAREA);
+        boolean pmHidden = hideWidget(privacyMode != ChatPrivacyMode.HIDE_NONE, InterfaceID.PmChat.CONTAINER);
+
         drawManager.requestNextFrameListener(image -> {
+            unhideWidget(chatHidden, InterfaceID.Chatbox.CHATAREA);
+            unhideWidget(pmHidden, InterfaceID.PmChat.CONTAINER);
+
             BufferedImage screenshot = (BufferedImage) image;
 
             uploadExecutor.submit(() -> {
@@ -319,6 +340,33 @@ public class BingoScreenshotManager {
             log.error("Error encoding screenshot to base64", e);
             return null;
         }
+    }
+
+    private boolean hideWidget(boolean shouldHide, int componentId) {
+        if (!shouldHide) {
+            return false;
+        }
+
+        Widget widget = client.getWidget(componentId);
+        if (widget == null || widget.isHidden()) {
+            return false;
+        }
+
+        widget.setHidden(true);
+        return true;
+    }
+
+    private void unhideWidget(boolean wasHidden, int componentId) {
+        if (!wasHidden) {
+            return;
+        }
+
+        clientThread.invoke(() -> {
+            Widget widget = client.getWidget(componentId);
+            if (widget != null) {
+                widget.setHidden(false);
+            }
+        });
     }
 
     private static class PendingScreenshot {

@@ -208,6 +208,17 @@ public interface EmbargoConfig extends Config
         return true;
     }
 
+    @ConfigItem(
+            keyName = "bingoChatPrivacy",
+            name = "Hide Chat in Screenshots",
+            description = "Whether to hide the chat box and private messages when capturing bingo screenshots",
+            position = 4,
+            section = bingoSettings
+    )
+    default ChatPrivacyMode bingoChatPrivacy() {
+        return ChatPrivacyMode.HIDE_SPLIT_PM;
+    }
+
     @ConfigSection(
             name = "Chat Commands",
             description = "Section that houses Chat Command options",
