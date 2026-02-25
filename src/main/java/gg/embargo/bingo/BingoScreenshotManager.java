@@ -34,7 +34,7 @@ public class BingoScreenshotManager {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     private static final int MAX_IMAGE_DIMENSION = 1280;
-    private static final float JPEG_QUALITY = 0.75f;
+    private static final float JPEG_QUALITY = 0.92f;
     private static final int MAX_CONCURRENT_UPLOADS = 2;
 
     @Inject
@@ -176,9 +176,11 @@ public class BingoScreenshotManager {
         int newHeight = (int) (height * scale);
 
         BufferedImage resized = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB);
-        resized.getGraphics().drawImage(
-                image.getScaledInstance(newWidth, newHeight, java.awt.Image.SCALE_SMOOTH),
-                0, 0, null);
+        java.awt.Graphics2D g2d = resized.createGraphics();
+        g2d.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g2d.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY);
+        g2d.drawImage(image, 0, 0, newWidth, newHeight, null);
+        g2d.dispose();
 
         return resized;
     }
@@ -187,7 +189,9 @@ public class BingoScreenshotManager {
         BufferedImage rgbImage = image;
         if (image.getType() != BufferedImage.TYPE_INT_RGB) {
             rgbImage = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
-            rgbImage.getGraphics().drawImage(image, 0, 0, null);
+            java.awt.Graphics2D g2d = rgbImage.createGraphics();
+            g2d.drawImage(image, 0, 0, null);
+            g2d.dispose();
         }
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
