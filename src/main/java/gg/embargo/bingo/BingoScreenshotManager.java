@@ -13,18 +13,13 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.ui.DrawManager;
 import okhttp3.*;
 
-import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
-import javax.imageio.stream.ImageOutputStream;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Base64;
-import java.util.Iterator;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -37,8 +32,6 @@ public class BingoScreenshotManager {
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final int MAX_IMAGE_DIMENSION = 1280;
-    private static final float JPEG_QUALITY = 0.92f;
     private static final int MAX_CONCURRENT_UPLOADS = 2;
 
     @Inject
@@ -107,18 +100,20 @@ public class BingoScreenshotManager {
             return;
         }
 
-        ChatPrivacyMode privacyMode = config.bingoChatPrivacy();
-        boolean chatHidden = hideWidget(privacyMode == ChatPrivacyMode.HIDE_ALL, InterfaceID.Chatbox.CHATAREA);
-        boolean pmHidden = hideWidget(privacyMode != ChatPrivacyMode.HIDE_NONE, InterfaceID.PmChat.CONTAINER);
+        clientThread.invoke(() -> {
+            ChatPrivacyMode privacyMode = config.bingoChatPrivacy();
+            boolean chatHidden = hideWidget(privacyMode == ChatPrivacyMode.HIDE_ALL, InterfaceID.Chatbox.CHATAREA);
+            boolean pmHidden = hideWidget(privacyMode != ChatPrivacyMode.HIDE_NONE, InterfaceID.PmChat.CONTAINER);
 
-        drawManager.requestNextFrameListener(image -> {
-            unhideWidget(chatHidden, InterfaceID.Chatbox.CHATAREA);
-            unhideWidget(pmHidden, InterfaceID.PmChat.CONTAINER);
+            drawManager.requestNextFrameListener(image -> {
+                unhideWidget(chatHidden, InterfaceID.Chatbox.CHATAREA);
+                unhideWidget(pmHidden, InterfaceID.PmChat.CONTAINER);
 
-            BufferedImage screenshot = (BufferedImage) image;
-            uploadExecutor.submit(() -> {
-                String base64 = toBase64(screenshot);
-                callback.accept(base64);
+                BufferedImage screenshot = (BufferedImage) image;
+                uploadExecutor.submit(() -> {
+                    String base64 = toBase64(screenshot);
+                    callback.accept(base64);
+                });
             });
         });
     }
@@ -138,18 +133,20 @@ public class BingoScreenshotManager {
 
         log.debug("Queuing screenshot capture for tile {} ({}) on board {}", tileId, itemName, boardId);
 
-        ChatPrivacyMode privacyMode = config.bingoChatPrivacy();
-        boolean chatHidden = hideWidget(privacyMode == ChatPrivacyMode.HIDE_ALL, InterfaceID.Chatbox.CHATAREA);
-        boolean pmHidden = hideWidget(privacyMode != ChatPrivacyMode.HIDE_NONE, InterfaceID.PmChat.CONTAINER);
+        clientThread.invoke(() -> {
+            ChatPrivacyMode privacyMode = config.bingoChatPrivacy();
+            boolean chatHidden = hideWidget(privacyMode == ChatPrivacyMode.HIDE_ALL, InterfaceID.Chatbox.CHATAREA);
+            boolean pmHidden = hideWidget(privacyMode != ChatPrivacyMode.HIDE_NONE, InterfaceID.PmChat.CONTAINER);
 
-        drawManager.requestNextFrameListener(image -> {
-            unhideWidget(chatHidden, InterfaceID.Chatbox.CHATAREA);
-            unhideWidget(pmHidden, InterfaceID.PmChat.CONTAINER);
+            drawManager.requestNextFrameListener(image -> {
+                unhideWidget(chatHidden, InterfaceID.Chatbox.CHATAREA);
+                unhideWidget(pmHidden, InterfaceID.PmChat.CONTAINER);
 
-            BufferedImage screenshot = (BufferedImage) image;
+                BufferedImage screenshot = (BufferedImage) image;
 
-            uploadExecutor.submit(() -> {
-                processAndUpload(screenshot, boardId, tileId, itemId, itemName, playerName, world);
+                uploadExecutor.submit(() -> {
+                    processAndUpload(screenshot, boardId, tileId, itemId, itemName, playerName, world);
+                });
             });
         });
     }
@@ -164,9 +161,7 @@ public class BingoScreenshotManager {
             }
 
             try {
-                BufferedImage processedImage = resizeIfNecessary(image);
-
-                byte[] imageBytes = toBytes(processedImage);
+                byte[] imageBytes = toBytes(image);
 
                 uploadToApi(imageBytes, boardId, tileId, itemId, itemName, playerName, world);
 
@@ -181,61 +176,9 @@ public class BingoScreenshotManager {
         }
     }
 
-    private BufferedImage resizeIfNecessary(BufferedImage image) {
-        int width = image.getWidth();
-        int height = image.getHeight();
-
-        if (width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION) {
-            return image;
-        }
-
-        double scale = Math.min(
-                (double) MAX_IMAGE_DIMENSION / width,
-                (double) MAX_IMAGE_DIMENSION / height);
-
-        int newWidth = (int) (width * scale);
-        int newHeight = (int) (height * scale);
-
-        BufferedImage resized = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB);
-        java.awt.Graphics2D g2d = resized.createGraphics();
-        g2d.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        g2d.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY);
-        g2d.drawImage(image, 0, 0, newWidth, newHeight, null);
-        g2d.dispose();
-
-        return resized;
-    }
-
     private byte[] toBytes(BufferedImage image) throws IOException {
-        BufferedImage rgbImage = image;
-        if (image.getType() != BufferedImage.TYPE_INT_RGB) {
-            rgbImage = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
-            java.awt.Graphics2D g2d = rgbImage.createGraphics();
-            g2d.drawImage(image, 0, 0, null);
-            g2d.dispose();
-        }
-
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-
-        Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpg");
-        if (!writers.hasNext()) {
-            ImageIO.write(rgbImage, "png", baos);
-            return baos.toByteArray();
-        }
-
-        ImageWriter writer = writers.next();
-        try (ImageOutputStream ios = ImageIO.createImageOutputStream(baos)) {
-            writer.setOutput(ios);
-
-            ImageWriteParam param = writer.getDefaultWriteParam();
-            param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            param.setCompressionQuality(JPEG_QUALITY);
-
-            writer.write(null, new IIOImage(rgbImage, null, null), param);
-        } finally {
-            writer.dispose();
-        }
-
+        ImageIO.write(image, "png", baos);
         return baos.toByteArray();
     }
 
@@ -333,8 +276,7 @@ public class BingoScreenshotManager {
 
     public String toBase64(BufferedImage image) {
         try {
-            BufferedImage processed = resizeIfNecessary(image);
-            byte[] bytes = toBytes(processed);
+            byte[] bytes = toBytes(image);
             return Base64.getEncoder().encodeToString(bytes);
         } catch (IOException e) {
             log.error("Error encoding screenshot to base64", e);
