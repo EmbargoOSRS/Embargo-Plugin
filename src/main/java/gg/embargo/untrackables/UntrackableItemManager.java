@@ -1,6 +1,7 @@
 package gg.embargo.untrackables;
 
 import gg.embargo.EmbargoApi;
+import gg.embargo.EmbargoConfig;
 import gg.embargo.PlayerIdentity;
 import lombok.Getter;
 import lombok.NonNull;
@@ -43,6 +44,9 @@ public class UntrackableItemManager {
 
     @Inject
     private ScheduledExecutorService executorService;
+
+    @Inject
+    private EmbargoConfig config;
 
     private static final String UNTRACKABLE_ENDPOINT = EmbargoApi.BASE_URL + "untrackables";
 
@@ -178,6 +182,10 @@ public class UntrackableItemManager {
     @Subscribe
     public void onScriptPostFired(ScriptPostFired event) {
         if (event.getScriptId() == ScriptID.BANKMAIN_BUILD) {
+            // Respect the player's choice to opt out of bank scanning
+            if (!config.syncUntrackableItems()) {
+                return;
+            }
             if (client == null || client.getLocalPlayer() == null) {
                 return;
             }

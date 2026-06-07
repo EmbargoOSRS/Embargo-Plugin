@@ -8,6 +8,25 @@ import java.awt.Color;
 public interface EmbargoConfig extends Config
 {
     @ConfigSection(
+            name = "Data Syncing",
+            description = "Control what data the plugin syncs to Embargo",
+            position = 0
+    )
+    String dataSyncSettings = "DataSyncSettings";
+
+    @ConfigItem(
+            keyName = "syncUntrackableItems",
+            name = "Sync Untradeable Bank Items",
+            description = "When you open your bank, scan it for untradeable items (e.g. Barrows gloves, Book of the dead, capes) "
+                    + "that can't be tracked any other way, and sync them to Embargo. Turn this off to disable the bank scan.",
+            position = 1,
+            section = dataSyncSettings
+    )
+    default boolean syncUntrackableItems() {
+        return true;
+    }
+
+    @ConfigSection(
             name = "Raid Notice Boards",
             description = "Section that houses Notice Board options",
             position = 1
