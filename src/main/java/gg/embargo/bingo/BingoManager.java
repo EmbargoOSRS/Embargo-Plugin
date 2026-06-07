@@ -4,6 +4,7 @@ package gg.embargo.bingo;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
+import gg.embargo.EmbargoApi;
 import gg.embargo.EmbargoConfig;
 import gg.embargo.bingo.dto.*;
 import lombok.Getter;
@@ -29,7 +30,7 @@ import java.util.function.Consumer;
 @Slf4j
 @Singleton
 public class BingoManager {
-    private static final String API_BASE = "https://embargo.gg/api/";
+    private static final String API_BASE = EmbargoApi.BASE_URL;
     private static final String BINGO_ACTIVE_ENDPOINT = API_BASE + "bingo/plugin/active";
     private static final String BINGO_DROP_ENDPOINT = API_BASE + "bingo/plugin/drop";
     private static final String BINGO_COMPLETIONS_ENDPOINT = API_BASE + "bingo/plugin/completions";

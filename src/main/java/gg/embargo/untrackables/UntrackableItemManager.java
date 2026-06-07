@@ -1,13 +1,15 @@
 package gg.embargo.untrackables;
 
+import gg.embargo.EmbargoApi;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.ScriptID;
 import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.gameval.InventoryID;
-import net.runelite.api.widgets.Widget;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import okhttp3.*;
@@ -41,7 +43,7 @@ public class UntrackableItemManager {
     @Inject
     private ScheduledExecutorService executorService;
 
-    private static final String UNTRACKABLE_ENDPOINT = "https://embargo.gg/api/untrackables";
+    private static final String UNTRACKABLE_ENDPOINT = EmbargoApi.BASE_URL + "untrackables";
 
     // Limit size to prevent unbounded growth - LRU eviction for player loot
     // timestamps
@@ -90,15 +92,11 @@ public class UntrackableItemManager {
     }
 
     void getUntrackableItems(String username) {
-        Widget widget = client.getWidget(786445);
+        // Read the bank's actual item container directly - no widget IDs to break on
+        // layout changes, and it sees every tab regardless of what's displayed.
         ItemContainer itemContainer = client.getItemContainer(InventoryID.BANK);
-        Widget[] children;
-        if (widget != null) {
-            children = widget.getChildren();
-        } else {
-            return;
-        }
-        if (itemContainer == null || children == null) {
+        if (itemContainer == null) {
+            log.info("[Untrackables] {} - bank scan aborted: bank item container is null", username);
             return;
         }
 
@@ -106,14 +104,16 @@ public class UntrackableItemManager {
         var itemMap = Arrays.stream(UntrackableItems.values()).map(UntrackableItems::getItemId)
                 .collect(Collectors.toCollection(HashSet::new));
 
-        // Quickly capture item data from widgets on client thread
-        int bankSize = Math.min(itemContainer.size(), children.length);
+        // Snapshot item data on the client thread; process/send off-thread.
+        // Placeholders have distinct ids with quantity 0, so they won't match the
+        // tracked real-item ids - empty/placeholder slots are excluded naturally.
+        Item[] bankItems = itemContainer.getItems();
+        int bankSize = bankItems.length;
         int[] itemIds = new int[bankSize];
         int[] quantities = new int[bankSize];
         for (int i = 0; i < bankSize; i++) {
-            Widget child = children[i];
-            itemIds[i] = child.getItemId();
-            quantities[i] = child.getItemQuantity();
+            itemIds[i] = bankItems[i].getId();
+            quantities[i] = bankItems[i].getQuantity();
         }
 
         // Process and send off the client thread to prevent stutter
@@ -142,7 +142,6 @@ public class UntrackableItemManager {
             Request request = new Request.Builder()
                     .url(UNTRACKABLE_ENDPOINT)
                     .post(requestBody.build())
-                    .addHeader("Content-Type", "application/json")
                     .build();
 
             try {
@@ -177,7 +176,7 @@ public class UntrackableItemManager {
 
     @Subscribe
     public void onScriptPostFired(ScriptPostFired event) {
-        if (event.getScriptId() == 277) {
+        if (event.getScriptId() == ScriptID.BANKMAIN_BUILD) {
             if (client == null || client.getLocalPlayer() == null) {
                 return;
             }

@@ -27,6 +27,7 @@ package gg.embargo.collections;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
+import gg.embargo.EmbargoApi;
 import gg.embargo.EmbargoConfig;
 import gg.embargo.manifest.Manifest;
 import gg.embargo.manifest.ManifestManager;
@@ -59,7 +60,7 @@ public class CollectionLogManager {
     private final int VARBITS_ARCHIVE_ID = 14;
     private static final String PLUGIN_USER_AGENT = "Embargo Runelite Plugin";
 
-    private static final String SUBMIT_URL = "https://embargo.gg/api/runelite/uploadcollectionlog";
+    private static final String SUBMIT_URL = EmbargoApi.BASE_URL + "runelite/uploadcollectionlog";
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     // Limit playerDataMap size to prevent unbounded growth - LRU eviction

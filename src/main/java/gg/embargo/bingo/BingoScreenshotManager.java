@@ -3,6 +3,7 @@ package gg.embargo.bingo;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import gg.embargo.EmbargoApi;
 import gg.embargo.ChatPrivacyMode;
 import gg.embargo.EmbargoConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +28,7 @@ import java.util.function.Consumer;
 @Slf4j
 @Singleton
 public class BingoScreenshotManager {
-    private static final String API_BASE = "https://embargo.gg/api/";
+    private static final String API_BASE = EmbargoApi.BASE_URL;
     private static final String SCREENSHOT_ENDPOINT = API_BASE + "bingo/plugin/screenshot";
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");

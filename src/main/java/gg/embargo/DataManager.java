@@ -137,7 +137,7 @@ public class DataManager {
 
     // private static final String MOCK_API_URI =
     // "https://a278d141-927f-433b-8e4b-6d994067900d.mock.pstmn.io/api/";
-    private static final String API_URI = "https://embargo.gg/api/";
+    private static final String API_URI = EmbargoApi.BASE_URL;
     private static final String MANIFEST_ENDPOINT = API_URI + APIRoutes.MANIFEST;
     private static final String UNTRACKABLE_POST_ENDPOINT = API_URI + APIRoutes.UNTRACKABLES;
     private static final String CHECK_REGISTRATION_ENDPOINT = API_URI + APIRoutes.CHECKREGISTRATION;
