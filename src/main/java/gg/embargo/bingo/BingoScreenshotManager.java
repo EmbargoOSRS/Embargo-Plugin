@@ -5,6 +5,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import gg.embargo.EmbargoApi;
 import gg.embargo.ChatPrivacyMode;
+import gg.embargo.PlayerIdentity;
 import gg.embargo.EmbargoConfig;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
@@ -129,7 +130,7 @@ public class BingoScreenshotManager {
             return;
         }
 
-        String playerName = client.getLocalPlayer().getName();
+        String playerName = PlayerIdentity.getUsername(client);
         int world = client.getWorld();
 
         log.debug("Queuing screenshot capture for tile {} ({}) on board {}", tileId, itemName, boardId);

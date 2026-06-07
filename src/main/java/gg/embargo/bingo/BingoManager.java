@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 import gg.embargo.EmbargoApi;
 import gg.embargo.EmbargoConfig;
+import gg.embargo.PlayerIdentity;
 import gg.embargo.bingo.dto.*;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -227,7 +228,7 @@ public class BingoManager {
             return;
         }
 
-        String username = client.getLocalPlayer().getName();
+        String username = PlayerIdentity.getUsername(client);
         if (username == null || username.isEmpty()) {
             return;
         }
@@ -355,7 +356,7 @@ public class BingoManager {
         if (client.getLocalPlayer() == null) {
             return;
         }
-        String playerName = client.getLocalPlayer().getName();
+        String playerName = PlayerIdentity.getUsername(client);
 
         BingoTile tile = state.getTile(tileId);
         if (tile != null) {
@@ -480,7 +481,7 @@ public class BingoManager {
             return;
         }
 
-        String playerName = client.getLocalPlayer().getName();
+        String playerName = PlayerIdentity.getUsername(client);
         if (playerName == null || playerName.isEmpty()) {
             return;
         }
@@ -581,7 +582,7 @@ public class BingoManager {
             return;
         }
 
-        String username = client.getLocalPlayer().getName();
+        String username = PlayerIdentity.getUsername(client);
 
         executor.execute(() -> {
             try {
