@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import gg.embargo.DataManager;
 import gg.embargo.EmbargoConfig;
 import gg.embargo.EmbargoPlugin;
+import gg.embargo.PlayerIdentity;
 import gg.embargo.bingo.BingoManager;
 import gg.embargo.bingo.BingoState;
 import gg.embargo.bingo.BingoTeam;
@@ -327,7 +328,7 @@ public class EmbargoPanel extends PluginPanel {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (client != null && client.getLocalPlayer() != null) {
-                    String name = client.getLocalPlayer().getName();
+                    String name = PlayerIdentity.getUsername(client);
                     if (name != null && !name.isEmpty()) {
                         try {
                             LinkBrowser.browse(new URI("https", "embargo.gg", "/profile/" + name, null).toASCIIString());
@@ -994,6 +995,22 @@ public class EmbargoPanel extends PluginPanel {
                 return;
             }
 
+            // getProfileAsync returns an empty JsonObject (the default value) on any
+            // HTTP failure or non-2xx response. An empty/default payload must NOT be
+            // allowed to overwrite already-populated real data with 0/N/A, otherwise a
+            // transient API error (e.g. during a manifest resync burst) wipes the panel.
+            // Only proceed if the payload actually contains profile fields.
+            boolean hasProfileData = embargoProfileData.has("accountPoints")
+                    || embargoProfileData.has("communityPoints")
+                    || embargoProfileData.has("currentRank")
+                    || embargoProfileData.has("currentHighestCAName")
+                    || embargoProfileData.has("missingGearRequirements")
+                    || embargoProfileData.has("missingUntradableItemIds");
+            if (!hasProfileData) {
+                log.debug("Profile fetch returned empty/default payload for {}; keeping existing panel data", username);
+                return;
+            }
+
             JsonElement currentAccountPoints = embargoProfileData.get("accountPoints");
             JsonElement currentCommunityPoints = embargoProfileData.get("communityPoints");
 
@@ -1026,9 +1043,14 @@ public class EmbargoPanel extends PluginPanel {
                 displayCAName = "N/A";
             }
 
-            JsonArray missingGearReqs = embargoProfileData.getAsJsonArray("missingGearRequirements");
-            JsonArray missingUntradableItemIdReqs = embargoProfileData
-                    .getAsJsonArray("missingUntradableItemIds");
+            JsonArray missingGearReqs = embargoProfileData.has("missingGearRequirements")
+                    && embargoProfileData.get("missingGearRequirements").isJsonArray()
+                            ? embargoProfileData.getAsJsonArray("missingGearRequirements")
+                            : new JsonArray();
+            JsonArray missingUntradableItemIdReqs = embargoProfileData.has("missingUntradableItemIds")
+                    && embargoProfileData.get("missingUntradableItemIds").isJsonArray()
+                            ? embargoProfileData.getAsJsonArray("missingUntradableItemIds")
+                            : new JsonArray();
 
             SwingUtilities.invokeLater(() -> {
                 embargoScoreLabel.setText(htmlLabel("Embargo Score:", " " + (accountPoints + communityPoints)));
@@ -1083,14 +1105,20 @@ public class EmbargoPanel extends PluginPanel {
                             missingRequirementsComponent.addDynamicMissingItem(names, ids, 3000);
                         }
 
+                        // Add ID-based untradables first so they resolve to a real item
+                        // icon. Many of these (e.g. Barrows gloves, Book of the dead) also
+                        // arrive by name in missingGearRequirements, where itemManager.search
+                        // can't resolve untradeables and falls back to a letter icon. Adding
+                        // the ID version first means the later name-based duplicate is the one
+                        // that gets deduped, not the real icon.
+                        for (int itemId : untradableIds) {
+                            missingRequirementsComponent.addMissingItem("", itemId);
+                        }
+
                         for (Object[] data : regularItemsData) {
                             String name = (String) data[0];
                             int id = (int) data[1];
                             missingRequirementsComponent.addMissingItem(name, id);
-                        }
-
-                        for (int itemId : untradableIds) {
-                            missingRequirementsComponent.addMissingItem("", itemId);
                         }
                     } finally {
                         missingRequirementsComponent.endBatchUpdate();
@@ -1594,7 +1622,7 @@ public class EmbargoPanel extends PluginPanel {
         missingRequirementsComponent.clearItems();
         updateMissingItemCount(0);
 
-        String username = client.getLocalPlayer().getName();
+        String username = PlayerIdentity.getUsername(client);
 
         // Re-check registration status in case user registered mid-session
         dataManager.isUserRegisteredAsync(username, isRegistered -> {
@@ -1694,7 +1722,7 @@ public class EmbargoPanel extends PluginPanel {
         }
         if (!isLoggedIn || scheduled) {
             if (client != null && client.getLocalPlayer() != null) {
-                var username = client.getLocalPlayer().getName();
+                var username = PlayerIdentity.getUsername(client);
 
                 // If username isn't available yet, bail out and let scheduled retry handle it
                 if (username == null || username.isEmpty()) {

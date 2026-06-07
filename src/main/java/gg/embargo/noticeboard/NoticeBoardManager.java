@@ -93,13 +93,13 @@ public class NoticeBoardManager {
     }
 
     private void setTOBNameColors(int clanColor) {
-        setApplicationWidget(50, 42, clanColor);
-        setNoticeBoardWidget(364, 3, clanColor);
+        setApplicationWidget(InterfaceID.TOB_PARTYDETAILS, 42, clanColor);
+        setNoticeBoardWidget(InterfaceID.TOB_PARTYLIST, 3, clanColor);
     }
 
     private void setTOANameColors(int clanColor) {
-        setApplicationWidget(774, 48, clanColor);
-        setNoticeBoardWidget(772, 2, clanColor);
+        setApplicationWidget(InterfaceID.TOA_PARTYDETAILS, 48, clanColor);
+        setNoticeBoardWidget(InterfaceID.TOA_PARTYLIST, 2, clanColor);
     }
 
     public void startUp()

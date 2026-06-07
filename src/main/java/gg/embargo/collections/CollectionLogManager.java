@@ -29,6 +29,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 import gg.embargo.EmbargoApi;
 import gg.embargo.EmbargoConfig;
+import gg.embargo.PlayerIdentity;
 import gg.embargo.manifest.Manifest;
 import gg.embargo.manifest.ManifestManager;
 import gg.embargo.ui.EmbargoPanel;
@@ -218,7 +219,7 @@ public class CollectionLogManager {
             return;
         }
 
-        String username = client.getLocalPlayer().getName();
+        String username = PlayerIdentity.getUsername(client);
         RuneScapeProfileType profileType = RuneScapeProfileType.getCurrent(client);
         PlayerProfile profileKey = new PlayerProfile(username, profileType);
 

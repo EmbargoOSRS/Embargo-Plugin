@@ -310,7 +310,7 @@ public class DataManager {
 
     @NonNull
     private JsonObject getMinigamePayload(String minigame, String message) {
-        var user = client.getLocalPlayer().getName();
+        var user = PlayerIdentity.getUsername(client);
         var world = client.getWorld();
         List<Player> players = getSurroundingPlayers();
 
@@ -333,7 +333,7 @@ public class DataManager {
 
     @NonNull
     private JsonObject getRaidCompletionPayload(String raid, String message) {
-        var user = client.getLocalPlayer().getName();
+        var user = PlayerIdentity.getUsername(client);
         List<Player> players = getSurroundingPlayers();
 
         // convert List<Player> to JSON
@@ -436,6 +436,15 @@ public class DataManager {
     private final AtomicBoolean apiFailureMode = new AtomicBoolean(false);
     private final AtomicLong lastApiFailure = new AtomicLong(0);
     private static final long API_RETRY_DELAY_MINUTES = 1;
+
+    /**
+     * Whether the registration check is currently in API-failure mode (transient
+     * network/server errors). A false registration result while in this mode is
+     * NOT authoritative and must not be treated as a genuine "not registered".
+     */
+    public boolean isInApiFailureMode() {
+        return apiFailureMode.get();
+    }
 
     /**
      * Checks if a user is registered with Embargo asynchronously
@@ -577,7 +586,7 @@ public class DataManager {
     private JsonObject getJsonObject(LootReceived event) {
         Collection<ItemStack> itemStacks = event.getItems();
 
-        var user = client.getLocalPlayer().getName();
+        var user = PlayerIdentity.getUsername(client);
         List<Player> players = getSurroundingPlayers();
 
         // convert List<Player> to JSON
@@ -684,7 +693,7 @@ public class DataManager {
             j.add("varp", gson.toJsonTree(tempVarpData));
             j.add("level", gson.toJsonTree(tempLevelData));
 
-            parent.addProperty("username", client.getLocalPlayer().getName());
+            parent.addProperty("username", PlayerIdentity.getUsername(client));
             parent.addProperty("profile", r.name());
             parent.addProperty("version", manifestManager.getLastCheckedManifestVersion());
             parent.add("data", j);
@@ -715,14 +724,14 @@ public class DataManager {
     }
 
     protected void submitToAPI() {
-        if (!hasDataToPush() || client.getLocalPlayer() == null || client.getLocalPlayer().getName() == null
+        if (!hasDataToPush() || client.getLocalPlayer() == null || PlayerIdentity.getUsername(client) == null
                 || stopTryingForAccount.get())
             return;
 
         if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD)
             return;
 
-        isUserRegisteredAsync(client.getLocalPlayer().getName(), isRegistered -> {
+        isUserRegisteredAsync(PlayerIdentity.getUsername(client), isRegistered -> {
             if (!isRegistered) {
                 return;
             }
@@ -988,11 +997,16 @@ public class DataManager {
                 && (client.getGameState() != GameState.HOPPING && client.getGameState() != GameState.LOGIN_SCREEN)) {
             submitToAPI();
             if (client.getLocalPlayer() != null) {
-                String username = client.getLocalPlayer().getName();
+                String username = PlayerIdentity.getUsername(client);
 
                 isUserRegisteredAsync(username, isRegistered -> {
                     if (isRegistered) {
                         embargoPanel.updateLoggedIn(true);
+                    } else if (isInApiFailureMode()) {
+                        // Transient API/network failure: the false result is not
+                        // authoritative. Do NOT log out or wipe the panel; keep the
+                        // currently displayed data and let a later retry refresh it.
+                        log.debug("Registration check failed transiently (API failure mode); preserving panel state");
                     } else {
                         embargoPanel.isLoggedIn = false;
                         embargoPanel.updateLoggedIn(false);

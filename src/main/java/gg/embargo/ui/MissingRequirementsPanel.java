@@ -7,6 +7,7 @@ import net.runelite.api.ItemComposition;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.util.AsyncBufferedImage;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.http.api.item.ItemPrice;
@@ -147,8 +148,10 @@ public class MissingRequirementsPanel extends PluginPanel {
                 ItemComposition ic = itemManager.getItemComposition(itemId);
                 String itemNameFromId = ic.getName();
 
-                // Check if this item already exists in our list
-                if (missingItems.stream().anyMatch(item -> Objects.equals(item.getItemName(), itemNameFromId))) {
+                // Check if this item already exists in our list (case-insensitive: the
+                // server's name casing may differ from the item composition's, e.g.
+                // "Barrows Gloves" vs "Barrows gloves").
+                if (missingItems.stream().anyMatch(item -> item.getItemName().equalsIgnoreCase(itemNameFromId))) {
                     log.debug("Item {} already exists, skipping", itemNameFromId);
                     return;
                 }
@@ -192,9 +195,10 @@ public class MissingRequirementsPanel extends PluginPanel {
                 }
             }
 
-            // If not a dynamic item, check for exact match as before
+            // If not a dynamic item, check for an existing match (case-insensitive, so a
+            // name-based entry doesn't duplicate an ID-based one that differs only in case).
             if (!isDynamicItem && !cleanedName.isEmpty() && missingItems.stream()
-                    .anyMatch(item -> Objects.equals(item.getItemName(), cleanedName))) {
+                    .anyMatch(item -> item.getItemName().equalsIgnoreCase(cleanedName))) {
                 log.debug("Item {} already exists, returning", cleanedName);
                 return;
             }
@@ -429,7 +433,11 @@ public class MissingRequirementsPanel extends PluginPanel {
             ScheduledFuture<?> future = executorService.scheduleAtFixedRate(() -> {
                 SwingUtilities.invokeLater(() -> {
                     int idx = currentIdx.updateAndGet(i -> (i + 1) % dyn.names.length);
-                    iconLabel.setIcon(new ImageIcon(dyn.icons.get(idx)));
+                    int rotId = dyn.itemIds[idx];
+                    BufferedImage rotImg = rotId != -1
+                            ? iconCache.getOrDefault(rotId, dyn.icons.get(idx))
+                            : dyn.icons.get(idx);
+                    iconLabel.setIcon(new ImageIcon(rotImg));
                     String tooltip = buildTooltipText(
                             new MissingItem(dyn.names[idx], dyn.itemIds[idx], dyn.icons.get(idx)));
                     iconLabel.setToolTipText(tooltip);
@@ -477,7 +485,13 @@ public class MissingRequirementsPanel extends PluginPanel {
 
         JPanel panel = createBaseItemPanel();
 
-        JLabel iconLabel = new JLabel(new ImageIcon(item.getIcon()));
+        // For real items, prefer the cached icon: it gets refreshed with the real
+        // sprite once the async image finishes loading (item.getIcon() may still be the
+        // blank snapshot taken when the item was first added).
+        BufferedImage iconImg = item.getItemId() != -1
+                ? iconCache.getOrDefault(item.getItemId(), item.getIcon())
+                : item.getIcon();
+        JLabel iconLabel = new JLabel(new ImageIcon(iconImg));
         iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
         panel.add(iconLabel, BorderLayout.CENTER);
         panel.setToolTipText(buildTooltipText(item));
@@ -550,15 +564,23 @@ public class MissingRequirementsPanel extends PluginPanel {
                 return cachedIcon;
             }
 
-            BufferedImage icon = itemManager.getImage(itemId);
+            AsyncBufferedImage icon = itemManager.getImage(itemId);
             if (icon == null) {
                 // Fallback to letter icon if image not available
                 log.debug("No icon found for itemId: {}, using letter fallback", itemId);
                 String letter = getLetterForItem(itemName);
                 return createLetterIcon(letter);
             }
+            // getImage() populates the sprite asynchronously on the client thread, so
+            // resizing right now often captures a blank image - especially for items the
+            // player doesn't own (exactly the missing-requirement case). Re-resize into
+            // the cache and rebuild the panel once the real sprite has loaded.
             BufferedImage resizedIcon = ImageUtil.resizeImage(icon, CELL_SIZE, CELL_SIZE);
             iconCache.put(itemId, resizedIcon);
+            icon.onLoaded(() -> {
+                iconCache.put(itemId, ImageUtil.resizeImage(icon, CELL_SIZE, CELL_SIZE));
+                updatePanel();
+            });
             return resizedIcon;
         } else {
             // For letter-based icons, create a cache key
@@ -752,13 +774,18 @@ public class MissingRequirementsPanel extends PluginPanel {
 
             return new ImageIcon(cachedIcon);
         }
-        BufferedImage icon = itemManager.getImage(itemId);
+        AsyncBufferedImage icon = itemManager.getImage(itemId);
         if (icon == null) {
             log.warn("No icon found for itemId: {}", itemId);
-            icon = createLetterIcon("?");
+            return new ImageIcon(createLetterIcon("?"));
         }
+        // Sprite loads asynchronously; refresh the cache and panel once it's ready.
         BufferedImage resizedIcon = ImageUtil.resizeImage(icon, CELL_SIZE, CELL_SIZE);
         iconCache.put(itemId, resizedIcon);
+        icon.onLoaded(() -> {
+            iconCache.put(itemId, ImageUtil.resizeImage(icon, CELL_SIZE, CELL_SIZE));
+            updatePanel();
+        });
         return new ImageIcon(resizedIcon);
     }
 

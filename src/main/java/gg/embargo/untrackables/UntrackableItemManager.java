@@ -1,6 +1,7 @@
 package gg.embargo.untrackables;
 
 import gg.embargo.EmbargoApi;
+import gg.embargo.PlayerIdentity;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -181,7 +182,7 @@ public class UntrackableItemManager {
                 return;
             }
 
-            var username = client.getLocalPlayer().getName();
+            var username = PlayerIdentity.getUsername(client);
 
             if (lastLootTime.containsKey(username)) {
                 LocalDateTime lastLootTimestamp = lastLootTime.get(username);

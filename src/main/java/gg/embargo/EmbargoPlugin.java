@@ -146,7 +146,7 @@ public class EmbargoPlugin extends Plugin {
 
 		if (client != null) {
 			if (client.getGameState() == GameState.LOGGED_IN) {
-				dataManager.isUserRegisteredAsync(client.getLocalPlayer().getName(), isRegistered -> {
+				dataManager.isUserRegisteredAsync(PlayerIdentity.getUsername(client), isRegistered -> {
 					if (isRegistered) {
 						embargoPanel.updateLoggedIn(false);
 					}
@@ -277,7 +277,7 @@ public class EmbargoPlugin extends Plugin {
 
 			Player localPlayer = client.getLocalPlayer();
 			if (localPlayer != null) {
-				String username = localPlayer.getName();
+				String username = PlayerIdentity.getUsername(client);
 
 				dataManager.isUserRegisteredAsync(username, isRegistered -> {
 					if (isRegistered) {
@@ -372,7 +372,7 @@ public class EmbargoPlugin extends Plugin {
 		}
 		Player localPlayer = client.getLocalPlayer();
 		if (localPlayer != null) {
-			String username = localPlayer.getName();
+			String username = PlayerIdentity.getUsername(client);
 			dataManager.isUserRegisteredAsync(username, isRegistered -> {
 				if (isRegistered) {
 					log.debug("updateProfileAfterLoggedIn Member registered");
