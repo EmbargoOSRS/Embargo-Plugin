@@ -58,8 +58,8 @@ public interface EmbargoConfig extends Config
     }
 
     @ConfigSection(
-            name = "Collection Log Sync Button",
-            description = "Add a button to the collection log interface to sync your collection log with Embargo",
+            name = "Collection Log",
+            description = "Settings for syncing your collection log with Embargo",
             position = 2
     )
     String collectionLogSettings = "CollectionLogSettings";
@@ -72,6 +72,15 @@ public interface EmbargoConfig extends Config
             section = collectionLogSettings
     )
     default boolean showCollectionLogSyncButton() { return true; }
+
+    @ConfigItem(
+            keyName = "autoSyncCollectionLog",
+            name = "Auto Sync on Open",
+            description = "Automatically sync your collection log with Embargo whenever you open it",
+            position = 2,
+            section = collectionLogSettings
+    )
+    default boolean autoSyncCollectionLog() { return true; }
 
     @ConfigSection(
             name = "Clan Easter Eggs",
@@ -255,6 +264,35 @@ public interface EmbargoConfig extends Config
     default Color chatCommandOutputColor()
     {
         return new Color(255, 116, 0);
+    }
+
+    @ConfigSection(
+            name = "3D Model Uploads",
+            description = "Settings for uploading your character's 3D model to your Embargo profile",
+            position = 7
+    )
+    String modelUploadSettings = "ModelUploadSettings";
+
+    @ConfigItem(
+            keyName = "enableModelUploads",
+            name = "Enable Model Uploads",
+            description = "Automatically upload your character's 3D model to your Embargo profile on login and equipment changes",
+            position = 0,
+            section = modelUploadSettings
+    )
+    default boolean enableModelUploads() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "includePlayerPet",
+            name = "Include Pet Model",
+            description = "Also upload your follower pet's 3D model when one is out",
+            position = 1,
+            section = modelUploadSettings
+    )
+    default boolean includePlayerPet() {
+        return true;
     }
 
 }
