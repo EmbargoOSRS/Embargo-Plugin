@@ -9,6 +9,7 @@ import gg.embargo.collections.*;
 import gg.embargo.commands.CommandManager;
 import gg.embargo.eastereggs.NPCRenameManager;
 import gg.embargo.manifest.ManifestManager;
+import gg.embargo.models.ModelUploadManager;
 import gg.embargo.ui.EmbargoPanel;
 import gg.embargo.eastereggs.ItemRenameManager;
 import gg.embargo.ui.MissingRequirementsPanel;
@@ -111,6 +112,9 @@ public class EmbargoPlugin extends Plugin {
 	@Inject
 	private BingoCodewordOverlayManager bingoCodewordOverlayManager;
 
+	@Inject
+	private ModelUploadManager modelUploadManager;
+
 	private RuneScapeProfileType lastProfile;
 
 	private boolean bingoAlertSentThisSession = false;
@@ -197,6 +201,10 @@ public class EmbargoPlugin extends Plugin {
 			bingoScreenshotManager.startUp();
 			bingoCodewordOverlayManager.startUp();
 		}
+
+		if (config != null && config.enableModelUploads()) {
+			modelUploadManager.startUp();
+		}
 	}
 
 	@Inject
@@ -230,13 +238,14 @@ public class EmbargoPlugin extends Plugin {
 		npcRenameManager.shutDown();
 		commandManager.shutDown();
 
-		// Shutdown bingo system (only if enabled)
-		if (config != null && config.enableBingo()) {
-			bingoDropDetector.shutDown();
-			bingoManager.shutDown();
-			bingoScreenshotManager.shutDown();
-			bingoCodewordOverlayManager.shutDown();
-		}
+		// Shut down unconditionally - each manager no-ops if it was never
+		// started, and gating on the current config would leak managers that
+		// were started and then disabled mid-session
+		bingoDropDetector.shutDown();
+		bingoManager.shutDown();
+		bingoScreenshotManager.shutDown();
+		bingoCodewordOverlayManager.shutDown();
+		modelUploadManager.shutDown();
 	}
 
 	@Subscribe
@@ -485,8 +494,14 @@ public class EmbargoPlugin extends Plugin {
 
 		if (cachedLevel == null || cachedLevel != newLevel) {
 			skillLevelCache.put(skillName, newLevel);
-			dataManager.storeSkillChanged(skillName, newLevel);
+			dataManager.storeSkillChanged(skillName, newLevel, statChanged.getXp());
 		}
+	}
+
+	@Subscribe
+	public void onGameTick(GameTick gameTick) {
+		// Handles the delayed CA/diary capture armed on login
+		dataManager.onGameTickForCapture();
 	}
 
 	@Subscribe
@@ -495,6 +510,8 @@ public class EmbargoPlugin extends Plugin {
 		if (eventType != LootRecordType.NPC && eventType != LootRecordType.EVENT) {
 			return;
 		}
+
+		dataManager.trackValuableDrop(event);
 
 		String npcName = event.getName();
 		if (dataManager.shouldTrackLoot(npcName)) {
@@ -540,12 +557,24 @@ public class EmbargoPlugin extends Plugin {
 		if (event.getKey().equals("enableBingo")) {
 			if (config.enableBingo()) {
 				bingoManager.startUp();
+				bingoDropDetector.startUp();
 				bingoScreenshotManager.startUp();
 				bingoCodewordOverlayManager.startUp();
 			} else {
+				bingoDropDetector.shutDown();
 				bingoManager.shutDown();
 				bingoScreenshotManager.shutDown();
 				bingoCodewordOverlayManager.shutDown();
+			}
+		}
+
+		// Handle model upload master switch config change
+		if (event.getKey().equals("enableModelUploads")) {
+			if (config.enableModelUploads()) {
+				modelUploadManager.startUp();
+				modelUploadManager.manualUpload();
+			} else {
+				modelUploadManager.shutDown();
 			}
 		}
 

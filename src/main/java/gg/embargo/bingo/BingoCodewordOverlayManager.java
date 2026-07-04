@@ -34,6 +34,12 @@ public class BingoCodewordOverlayManager {
      */
     private final Map<Integer, BingoCodewordOverlay> activeOverlays = new HashMap<>();
 
+    // Held in a field so add/remove operate on the same listener instance -
+    // a fresh method reference is a different object and would never unregister
+    private final java.util.function.Consumer<List<BingoState>> stateChangeListener = this::onBingoStateChange;
+
+    private boolean started = false;
+
     @Inject
     public BingoCodewordOverlayManager(Client client, ClientThread clientThread, BingoManager bingoManager,
                                         EmbargoConfig config, OverlayManager overlayManager) {
@@ -48,8 +54,13 @@ public class BingoCodewordOverlayManager {
      * Starts the overlay manager and registers for state changes.
      */
     public void startUp() {
+        if (started) {
+            return;
+        }
+        started = true;
+
         // Register for bingo state changes
-        bingoManager.addStateChangeListener(this::onBingoStateChange);
+        bingoManager.addStateChangeListener(stateChangeListener);
 
         // Initial update based on current state
         updateOverlays();
@@ -59,7 +70,12 @@ public class BingoCodewordOverlayManager {
      * Shuts down the overlay manager and removes all overlays.
      */
     public void shutDown() {
-        bingoManager.removeStateChangeListener(this::onBingoStateChange);
+        if (!started) {
+            return;
+        }
+        started = false;
+
+        bingoManager.removeStateChangeListener(stateChangeListener);
         removeAllOverlays();
     }
 

@@ -257,5 +257,34 @@ public interface EmbargoConfig extends Config
         return new Color(255, 116, 0);
     }
 
+    @ConfigSection(
+            name = "3D Model Uploads",
+            description = "Settings for uploading your character's 3D model to your Embargo profile",
+            position = 7
+    )
+    String modelUploadSettings = "ModelUploadSettings";
+
+    @ConfigItem(
+            keyName = "enableModelUploads",
+            name = "Enable Model Uploads",
+            description = "Automatically upload your character's 3D model to your Embargo profile on login and equipment changes",
+            position = 0,
+            section = modelUploadSettings
+    )
+    default boolean enableModelUploads() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "includePlayerPet",
+            name = "Include Pet Model",
+            description = "Also upload your follower pet's 3D model when one is out",
+            position = 1,
+            section = modelUploadSettings
+    )
+    default boolean includePlayerPet() {
+        return true;
+    }
+
 }
 
