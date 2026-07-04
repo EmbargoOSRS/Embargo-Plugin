@@ -34,6 +34,7 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.*;
 import net.runelite.client.eventbus.EventBus;
@@ -58,6 +59,7 @@ public class SyncButtonManager {
 
     private int baseMenuHeight = -1;
     private int lastAttemptedSync = -1;
+    private boolean started = false;
 
     @Getter
     @Setter
@@ -74,11 +76,21 @@ public class SyncButtonManager {
     }
 
     public void startUp() {
+        if (started) {
+            return;
+        }
+        started = true;
+
         setSyncAllowed(false);
         eventBus.register(this);
     }
 
     public void shutDown() {
+        if (!started) {
+            return;
+        }
+        started = false;
+
         eventBus.unregister(this);
     }
 
@@ -115,7 +127,7 @@ public class SyncButtonManager {
 
         // Set sync allowed flag and trigger search to iterate collection log
         setSyncAllowed(true);
-        client.menuAction(-1, 40697932, MenuAction.CC_OP, 1, -1, "Search", null);
+        client.menuAction(-1, InterfaceID.Collection.SEARCH_TOGGLE, MenuAction.CC_OP, 1, -1, "Search", null);
         client.runScript(2240);
 
         client.addChatMessage(

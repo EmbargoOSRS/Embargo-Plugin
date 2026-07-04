@@ -58,8 +58,8 @@ public interface EmbargoConfig extends Config
     }
 
     @ConfigSection(
-            name = "Collection Log Sync Button",
-            description = "Add a button to the collection log interface to sync your collection log with Embargo",
+            name = "Collection Log",
+            description = "Settings for syncing your collection log with Embargo",
             position = 2
     )
     String collectionLogSettings = "CollectionLogSettings";
@@ -72,6 +72,15 @@ public interface EmbargoConfig extends Config
             section = collectionLogSettings
     )
     default boolean showCollectionLogSyncButton() { return true; }
+
+    @ConfigItem(
+            keyName = "autoSyncCollectionLog",
+            name = "Auto Sync on Open",
+            description = "Automatically sync your collection log with Embargo whenever you open it",
+            position = 2,
+            section = collectionLogSettings
+    )
+    default boolean autoSyncCollectionLog() { return true; }
 
     @ConfigSection(
             name = "Clan Easter Eggs",
