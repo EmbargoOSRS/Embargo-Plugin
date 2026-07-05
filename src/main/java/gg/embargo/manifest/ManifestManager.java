@@ -42,9 +42,21 @@ public class ManifestManager {
     // 3 minutes in milliseconds
     private static final long CHECK_INTERVAL = 3 * 60 * 1000;
 
-    //private static final String MOCK_API_URI = "https://a278d141-927f-433b-8e4b-6d994067900d.mock.pstmn.io/api/";
     private static final String API_URI = EmbargoApi.BASE_URL;
     private static final String MANIFEST_ENDPOINT = API_URI + "runelite/manifest";
+
+    /**
+     * Remote kill switch: a feature is enabled unless the manifest explicitly
+     * maps its key to false. Unknown keys and a missing manifest default to
+     * enabled so the plugin degrades gracefully when the API is unreachable.
+     */
+    public boolean isFeatureEnabled(String featureKey) {
+        Manifest m = manifest;
+        if (m == null || m.features == null) {
+            return true;
+        }
+        return m.features.getOrDefault(featureKey, true);
+    }
 
     public Manifest getLatestManifest() {
         long currentTime = System.currentTimeMillis();

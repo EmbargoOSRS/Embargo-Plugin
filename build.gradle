@@ -24,7 +24,7 @@ dependencies {
 }
 
 group = 'gg.embargo'
-version = '1.6.1'
+version = '1.8.0'
 
 
 tasks.withType(JavaCompile) {

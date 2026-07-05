@@ -38,7 +38,10 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.EventBus;
@@ -73,10 +76,18 @@ public class CollectionLogManager {
             return size() > MAX_PLAYER_DATA_CACHE_SIZE;
         }
     };
+    // The game transmits collection log entries to the client via script 4100;
+    // script 7797 fires when the collection log interface is set up, and script
+    // 2240 re-initializes the interface
+    private static final int COLLECTION_DELAYED_TRANSMIT_SCRIPT = 4100;
+    private static final int COLLECTION_LOG_SETUP_SCRIPT = 7797;
+    private static final int COLLECTION_INIT_SCRIPT = 2240;
+
     private int cyclesSinceSuccessfulCall = 0;
     // Use instance field instead of static to allow proper cleanup per instance
     private final List<Map<String, Map<String, Object>>> rawClogItems = new ArrayList<>();
     private int tickCollectionLogScriptFired = -1;
+    private boolean isAutoRetrieval = false;
 
     private SyncButtonManager syncButtonManager;
 
@@ -142,17 +153,45 @@ public class CollectionLogManager {
 
     @Subscribe
     public void onGameTick(GameTick gameTick) {
-        // Submit the collection log data two ticks after the first script prefires
-        if (tickCollectionLogScriptFired != -1 &&
-                tickCollectionLogScriptFired + 2 < client.getTickCount()) {
-            tickCollectionLogScriptFired = -1;
-            if (manifestManager.getManifest() == null) {
+        // Submit the collection log data two ticks after the last script prefire
+        if (tickCollectionLogScriptFired == -1 ||
+                tickCollectionLogScriptFired + 2 >= client.getTickCount()) {
+            return;
+        }
+
+        tickCollectionLogScriptFired = -1;
+        isAutoRetrieval = false;
+
+        // Chat feedback is only shown for button-triggered syncs; automatic
+        // captures on collection log open stay silent
+        boolean manualSync = syncButtonManager.isSyncAllowed();
+        syncButtonManager.setSyncAllowed(false);
+
+        // Only submit automatically when the user has auto sync enabled - the
+        // transmit script also fires when the search is opened by hand
+        if (!manualSync && !config.autoSyncCollectionLog()) {
+            return;
+        }
+
+        if (manifestManager.getManifest() == null) {
+            if (manualSync) {
                 client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Embargo",
                         "Failed to sync collection log. Try restarting the Embargo plugin.", "Embargo");
-                return;
             }
-            scheduledExecutorService.execute(this::submitTask);
+            return;
         }
+
+        if (client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null) {
+            return;
+        }
+
+        // Snapshot everything that needs the client thread here; only the HTTP
+        // submission runs on the executor
+        String username = PlayerIdentity.getUsername(client);
+        RuneScapeProfileType profileType = RuneScapeProfileType.getCurrent(client);
+        List<Map<String, Map<String, Object>>> itemsSnapshot = new ArrayList<>(rawClogItems);
+
+        scheduledExecutorService.execute(() -> submitTask(username, profileType, itemsSnapshot, manualSync));
     }
 
     @Subscribe
@@ -165,86 +204,110 @@ public class CollectionLogManager {
             case CONNECTION_LOST:
             case LOGIN_SCREEN: // Add this case to handle explicit logout
                 rawClogItems.clear();
+                tickCollectionLogScriptFired = -1;
+                isAutoRetrieval = false;
                 embargoPanel.logOut();
                 break;
         }
     }
 
-    // CollectionLog Subscribe
+    // Code from: WikiSync
+    // Repository: https://github.com/weirdgloop/WikiSync
+    // License: BSD 2-Clause License
     @Subscribe
     public void onScriptPreFired(ScriptPreFired preFired) {
-        if (syncButtonManager.isSyncAllowed() && preFired.getScriptId() == 4100) {
-            tickCollectionLogScriptFired = client.getTickCount();
-            Object[] args = preFired.getScriptEvent().getArguments();
-            int itemId = (int) args[1];
-            int itemCount = (int) args[2];
-
-            String itemName;
-            try {
-                ItemComposition ic = itemManager.getItemComposition(itemId);
-                itemName = ic.getName();
-            } catch (Exception e) {
-                itemName = String.valueOf(itemId);
-            }
-
-            // Remove any existing entry for this itemName
-            String finalItemName = itemName;
-            rawClogItems.removeIf(map -> map.containsKey(finalItemName));
-
-            // Add the new entry
-            Map<String, Object> itemData = new HashMap<>();
-            itemData.put("id", itemId);
-            itemData.put("quantity", itemCount);
-
-            Map<String, Map<String, Object>> entry = new HashMap<>();
-            entry.put(itemName, itemData);
-
-            rawClogItems.add(entry);
+        if (preFired.getScriptId() != COLLECTION_DELAYED_TRANSMIT_SCRIPT) {
+            return;
         }
+
+        // Never capture while viewing another player's collection log through
+        // the POH adventure log
+        if (client.getVarbitValue(VarbitID.COLLECTION_POH_HOST_BOOK_OPEN) == 1) {
+            return;
+        }
+
+        tickCollectionLogScriptFired = client.getTickCount();
+        Object[] args = preFired.getScriptEvent().getArguments();
+        int itemId = (int) args[1];
+        int itemCount = (int) args[2];
+
+        String itemName;
+        try {
+            ItemComposition ic = itemManager.getItemComposition(itemId);
+            itemName = ic.getName();
+        } catch (Exception e) {
+            itemName = String.valueOf(itemId);
+        }
+
+        // Remove any existing entry for this itemName
+        String finalItemName = itemName;
+        rawClogItems.removeIf(map -> map.containsKey(finalItemName));
+
+        // Add the new entry
+        Map<String, Object> itemData = new HashMap<>();
+        itemData.put("id", itemId);
+        itemData.put("quantity", itemCount);
+
+        Map<String, Map<String, Object>> entry = new HashMap<>();
+        entry.put(itemName, itemData);
+
+        rawClogItems.add(entry);
     }
 
-    synchronized public void submitTask() {
-        // If sync hasn't been toggled to be allowed
-        if (!syncButtonManager.isSyncAllowed()) {
+    // When the collection log is opened, make the server transmit every entry
+    // by toggling the search (search needs the full dataset), then re-run the
+    // init script so the view resets and the user never sees it.
+    // Technique from WikiSync (https://github.com/weirdgloop/WikiSync,
+    // BSD 2-Clause), as used by RuneProfile.
+    @Subscribe
+    public void onScriptPostFired(ScriptPostFired event) {
+        if (event.getScriptId() != COLLECTION_LOG_SETUP_SCRIPT) {
             return;
         }
 
-        // TODO: do we want other GameStates?
-        if (client.getGameState() != GameState.LOGGED_IN) {
+        if (!config.autoSyncCollectionLog()) {
             return;
         }
 
-        if (client.getLocalPlayer() == null) {
-            log.debug("Skipped due to local player being null");
+        // Viewing another player's collection log via the POH adventure log -
+        // drop anything captured to avoid storing their data
+        if (client.getVarbitValue(VarbitID.COLLECTION_POH_HOST_BOOK_OPEN) == 1) {
+            rawClogItems.clear();
             return;
         }
 
-        String username = PlayerIdentity.getUsername(client);
-        RuneScapeProfileType profileType = RuneScapeProfileType.getCurrent(client);
+        // The search toggle and init script below re-fire the setup script;
+        // don't re-trigger while a retrieval is already underway
+        if (isAutoRetrieval || tickCollectionLogScriptFired != -1) {
+            return;
+        }
+
+        isAutoRetrieval = true;
+        client.menuAction(-1, InterfaceID.Collection.SEARCH_TOGGLE, MenuAction.CC_OP, 1, -1, "Search", null);
+        client.runScript(COLLECTION_INIT_SCRIPT);
+    }
+
+    synchronized public void submitTask(String username, RuneScapeProfileType profileType,
+            List<Map<String, Map<String, Object>>> items, boolean manualSync) {
+        // Do not send if slot data wasn't generated
+        if (username == null || items.isEmpty()) {
+            return;
+        }
+
         PlayerProfile profileKey = new PlayerProfile(username, profileType);
 
-        PlayerData newPlayerData = getPlayerData();
+        PlayerData newPlayerData = new PlayerData();
+        newPlayerData.rawClogItems = items;
         PlayerData oldPlayerData = playerDataMap.computeIfAbsent(profileKey, k -> new PlayerData());
 
-        // Do not send if slot data wasn't generated
-        if (newPlayerData.rawClogItems.isEmpty()) {
-            return;
-        }
-
-        submitPlayerData(profileKey, newPlayerData, oldPlayerData);
-    }
-
-    private PlayerData getPlayerData() {
-        PlayerData out = new PlayerData();
-        out.rawClogItems = rawClogItems;
-        return out;
+        submitPlayerData(profileKey, newPlayerData, oldPlayerData, manualSync);
     }
 
     private void merge(PlayerData oldPlayerData, PlayerData delta) {
         oldPlayerData.rawClogItems = delta.rawClogItems;
     }
 
-    private void submitPlayerData(PlayerProfile profileKey, PlayerData delta, PlayerData old) {
+    private void submitPlayerData(PlayerProfile profileKey, PlayerData delta, PlayerData old, boolean manualSync) {
         // If cyclesSinceSuccessfulCall is not a perfect square, we should not try to
         // submit.
         // This gives us quadratic backoff.
@@ -270,8 +333,10 @@ public class CollectionLogManager {
             @Override
             public void onFailure(Call call, IOException e) {
                 log.debug("Failed to submit: ", e);
-                clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Embargo",
-                        "Failed to upload data to Embargo.", "Embargo"));
+                if (manualSync) {
+                    clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Embargo",
+                            "Failed to upload data to Embargo.", "Embargo"));
+                }
             }
 
             @Override
@@ -279,14 +344,18 @@ public class CollectionLogManager {
                 try (response) {
                     if (!response.isSuccessful()) {
                         log.debug("Failed to submit: {}", response.code());
-                        clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
-                                "<col=ff9000>[Embargo]</col> Failed to upload collection log data.", null));
+                        if (manualSync) {
+                            clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+                                    "<col=ff9000>[Embargo]</col> Failed to upload collection log data.", null));
+                        }
                         return;
                     }
                     merge(old, delta);
                     cyclesSinceSuccessfulCall = 0;
-                    clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
-                            "<col=ff9000>[Embargo]</col> Collection log synced successfully.", null));
+                    if (manualSync) {
+                        clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+                                "<col=ff9000>[Embargo]</col> Collection log synced successfully.", null));
+                    }
                 } finally {
                     response.close();
                 }
@@ -298,6 +367,12 @@ public class CollectionLogManager {
     public void onConfigChanged(ConfigChanged event) {
         String CONFIG_GROUP = "embargo";
         if (!event.getGroup().equals(CONFIG_GROUP)) {
+            return;
+        }
+
+        // Only react to the button toggle itself - reacting to every config
+        // change would repeatedly re-register the button manager
+        if (!event.getKey().equals("showCollectionLogSyncButton")) {
             return;
         }
 

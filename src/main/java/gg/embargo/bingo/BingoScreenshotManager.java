@@ -18,9 +18,16 @@ import okhttp3.*;
 import javax.imageio.ImageIO;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -113,7 +120,7 @@ public class BingoScreenshotManager {
 
                 BufferedImage screenshot = (BufferedImage) image;
                 uploadExecutor.submit(() -> {
-                    String base64 = toBase64(screenshot);
+                    String base64 = toBase64(prepareImage(screenshot));
                     callback.accept(base64);
                 });
             });
@@ -147,7 +154,7 @@ public class BingoScreenshotManager {
                 BufferedImage screenshot = (BufferedImage) image;
 
                 uploadExecutor.submit(() -> {
-                    processAndUpload(screenshot, boardId, tileId, itemId, itemName, playerName, world);
+                    processAndUpload(prepareImage(screenshot), boardId, tileId, itemId, itemName, playerName, world);
                 });
             });
         });
@@ -182,6 +189,68 @@ public class BingoScreenshotManager {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ImageIO.write(image, "png", baos);
         return baos.toByteArray();
+    }
+
+    // Maximum uploaded screenshot width; larger frames are downscaled
+    private static final int MAX_SCREENSHOT_WIDTH = 1600;
+
+    /**
+     * Applies upload hygiene to a captured frame: downscales very wide frames
+     * to cap payload size, and burns local + UTC timestamps into the corner so
+     * staff can verify when the screenshot was actually taken.
+     */
+    private BufferedImage prepareImage(BufferedImage image) {
+        BufferedImage result = image;
+
+        if (result.getWidth() > MAX_SCREENSHOT_WIDTH) {
+            double scale = (double) MAX_SCREENSHOT_WIDTH / result.getWidth();
+            int newHeight = (int) Math.round(result.getHeight() * scale);
+            BufferedImage scaled = new BufferedImage(MAX_SCREENSHOT_WIDTH, newHeight, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = scaled.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.drawImage(result, 0, 0, MAX_SCREENSHOT_WIDTH, newHeight, null);
+            g.dispose();
+            result = scaled;
+        } else if (result.getType() != BufferedImage.TYPE_INT_RGB) {
+            // Copy so the timestamp drawing never mutates the original frame
+            BufferedImage copy = new BufferedImage(result.getWidth(), result.getHeight(), BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = copy.createGraphics();
+            g.drawImage(result, 0, 0, null);
+            g.dispose();
+            result = copy;
+        }
+
+        drawTimestamp(result);
+        return result;
+    }
+
+    private void drawTimestamp(BufferedImage image) {
+        ZonedDateTime now = ZonedDateTime.now();
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        String text = now.format(formatter) + " " + now.getZone().getId()
+                + " | " + now.withZoneSameInstant(ZoneOffset.UTC).format(formatter) + " UTC";
+
+        Graphics2D g = image.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
+            int x = 8;
+            int y = image.getHeight() - 8;
+
+            // Dark outline so the text is readable on any background
+            g.setColor(Color.BLACK);
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    if (dx != 0 || dy != 0) {
+                        g.drawString(text, x + dx, y + dy);
+                    }
+                }
+            }
+            g.setColor(Color.WHITE);
+            g.drawString(text, x, y);
+        } finally {
+            g.dispose();
+        }
     }
 
     private void uploadToApi(byte[] imageBytes, int boardId, int tileId, int itemId,

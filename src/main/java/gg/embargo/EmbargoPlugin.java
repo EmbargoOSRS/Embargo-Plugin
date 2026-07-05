@@ -8,8 +8,17 @@ import gg.embargo.bingo.BingoScreenshotManager;
 import gg.embargo.collections.*;
 import gg.embargo.commands.CommandManager;
 import gg.embargo.eastereggs.NPCRenameManager;
+import gg.embargo.announcements.AnnouncementManager;
+import gg.embargo.events.ClanEventScheduleManager;
+import gg.embargo.identity.NameChangeManager;
 import gg.embargo.manifest.ManifestManager;
+import gg.embargo.models.ModelUploadManager;
+import gg.embargo.pbs.PersonalBestManager;
+import gg.embargo.pets.PetAttributionManager;
 import gg.embargo.ui.EmbargoPanel;
+import gg.embargo.ui.PlayerLookupMenuManager;
+import gg.embargo.ui.PopupNotificationService;
+import gg.embargo.ui.WorldHopService;
 import gg.embargo.eastereggs.ItemRenameManager;
 import gg.embargo.ui.MissingRequirementsPanel;
 import gg.embargo.ui.SyncButtonManager;
@@ -111,7 +120,46 @@ public class EmbargoPlugin extends Plugin {
 	@Inject
 	private BingoCodewordOverlayManager bingoCodewordOverlayManager;
 
+	@Inject
+	private ModelUploadManager modelUploadManager;
+
+	@Inject
+	private AnnouncementManager announcementManager;
+
+	@Inject
+	private PersonalBestManager personalBestManager;
+
+	@Inject
+	private PetAttributionManager petAttributionManager;
+
+	@Inject
+	private NameChangeManager nameChangeManager;
+
+	@Inject
+	private PlayerLookupMenuManager playerLookupMenuManager;
+
+	@Inject
+	private ClanEventScheduleManager clanEventScheduleManager;
+
+	@Inject
+	private WorldHopService worldHopService;
+
+	@Inject
+	private PopupNotificationService popupNotificationService;
+
 	private RuneScapeProfileType lastProfile;
+
+	// Shows a native popup when a bingo tile completes; held so it can be
+	// removed from the manager on shutdown
+	private final java.util.function.Consumer<gg.embargo.bingo.BingoCompletionEvent> bingoCompletionPopupListener =
+			completion -> {
+				if (config == null || !config.enableBingo()) {
+					return;
+				}
+				String team = completion.getTeamName() != null ? completion.getTeamName() : "your team";
+				popupNotificationService.showPopup("Bingo Tile Complete!",
+						completion.getTileTitle() + " for " + team);
+			};
 
 	private boolean bingoAlertSentThisSession = false;
 
@@ -197,6 +245,32 @@ public class EmbargoPlugin extends Plugin {
 			bingoScreenshotManager.startUp();
 			bingoCodewordOverlayManager.startUp();
 		}
+
+		// Show a native game popup when a bingo tile is completed
+		bingoManager.addCompletionListener(bingoCompletionPopupListener);
+
+		if (config != null && config.enableModelUploads()) {
+			modelUploadManager.startUp();
+		}
+
+		// Clan platform managers - each is config-gated but also internally
+		// no-ops if started twice, and the manifest can remotely disable them
+		worldHopService.startUp();
+		announcementManager.startUp();
+		clanEventScheduleManager.startUp();
+
+		if (config != null && config.enablePbTracking()) {
+			personalBestManager.startUp();
+		}
+		if (config != null && config.enablePetAttribution()) {
+			petAttributionManager.startUp();
+		}
+		if (config != null && config.enableNameChangeSync()) {
+			nameChangeManager.startUp();
+		}
+		if (config != null && config.showLookupMenuOption()) {
+			playerLookupMenuManager.startUp();
+		}
 	}
 
 	@Inject
@@ -230,13 +304,24 @@ public class EmbargoPlugin extends Plugin {
 		npcRenameManager.shutDown();
 		commandManager.shutDown();
 
-		// Shutdown bingo system (only if enabled)
-		if (config != null && config.enableBingo()) {
-			bingoDropDetector.shutDown();
-			bingoManager.shutDown();
-			bingoScreenshotManager.shutDown();
-			bingoCodewordOverlayManager.shutDown();
-		}
+		// Shut down unconditionally - each manager no-ops if it was never
+		// started, and gating on the current config would leak managers that
+		// were started and then disabled mid-session
+		bingoManager.removeCompletionListener(bingoCompletionPopupListener);
+		bingoDropDetector.shutDown();
+		bingoManager.shutDown();
+		bingoScreenshotManager.shutDown();
+		bingoCodewordOverlayManager.shutDown();
+		modelUploadManager.shutDown();
+
+		announcementManager.shutDown();
+		personalBestManager.shutDown();
+		petAttributionManager.shutDown();
+		nameChangeManager.shutDown();
+		playerLookupMenuManager.shutDown();
+		clanEventScheduleManager.shutDown();
+		worldHopService.shutDown();
+		popupNotificationService.clear();
 	}
 
 	@Subscribe
@@ -485,8 +570,17 @@ public class EmbargoPlugin extends Plugin {
 
 		if (cachedLevel == null || cachedLevel != newLevel) {
 			skillLevelCache.put(skillName, newLevel);
-			dataManager.storeSkillChanged(skillName, newLevel);
+			dataManager.storeSkillChanged(skillName, newLevel, statChanged.getXp());
 		}
+	}
+
+	@Subscribe
+	public void onGameTick(GameTick gameTick) {
+		// Handles the delayed CA/diary capture armed on login
+		dataManager.onGameTickForCapture();
+
+		// Drain at most one queued native popup notification
+		popupNotificationService.processQueue();
 	}
 
 	@Subscribe
@@ -495,6 +589,8 @@ public class EmbargoPlugin extends Plugin {
 		if (eventType != LootRecordType.NPC && eventType != LootRecordType.EVENT) {
 			return;
 		}
+
+		dataManager.trackValuableDrop(event);
 
 		String npcName = event.getName();
 		if (dataManager.shouldTrackLoot(npcName)) {
@@ -540,12 +636,24 @@ public class EmbargoPlugin extends Plugin {
 		if (event.getKey().equals("enableBingo")) {
 			if (config.enableBingo()) {
 				bingoManager.startUp();
+				bingoDropDetector.startUp();
 				bingoScreenshotManager.startUp();
 				bingoCodewordOverlayManager.startUp();
 			} else {
+				bingoDropDetector.shutDown();
 				bingoManager.shutDown();
 				bingoScreenshotManager.shutDown();
 				bingoCodewordOverlayManager.shutDown();
+			}
+		}
+
+		// Handle model upload master switch config change
+		if (event.getKey().equals("enableModelUploads")) {
+			if (config.enableModelUploads()) {
+				modelUploadManager.startUp();
+				modelUploadManager.manualUpload();
+			} else {
+				modelUploadManager.shutDown();
 			}
 		}
 
@@ -555,6 +663,34 @@ public class EmbargoPlugin extends Plugin {
 				// Notify server that tracking was disabled
 				bingoManager.notifyTrackingDisabled();
 			}
+		}
+
+		// Clan platform feature toggles
+		switch (event.getKey()) {
+			case "enablePbTracking":
+				toggleManager(config.enablePbTracking(), personalBestManager::startUp, personalBestManager::shutDown);
+				break;
+			case "enablePetAttribution":
+				toggleManager(config.enablePetAttribution(), petAttributionManager::startUp,
+						petAttributionManager::shutDown);
+				break;
+			case "enableNameChangeSync":
+				toggleManager(config.enableNameChangeSync(), nameChangeManager::startUp, nameChangeManager::shutDown);
+				break;
+			case "showLookupMenuOption":
+				toggleManager(config.showLookupMenuOption(), playerLookupMenuManager::startUp,
+						playerLookupMenuManager::shutDown);
+				break;
+			default:
+				break;
+		}
+	}
+
+	private void toggleManager(boolean enabled, Runnable startUp, Runnable shutDown) {
+		if (enabled) {
+			startUp.run();
+		} else {
+			shutDown.run();
 		}
 	}
 

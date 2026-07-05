@@ -27,6 +27,9 @@ package gg.embargo;
 
 import com.google.common.collect.HashMultimap;
 import com.google.gson.*;
+import gg.embargo.collections.ClanData;
+import gg.embargo.collections.DropActivity;
+import gg.embargo.collections.PlayerAppearance;
 import gg.embargo.manifest.ManifestManager;
 import gg.embargo.ui.EmbargoPanel;
 import gg.embargo.untrackables.UntrackableItemManager;
@@ -35,7 +38,13 @@ import lombok.NonNull;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
+import net.runelite.api.clan.ClanChannel;
+import net.runelite.api.clan.ClanMember;
+import net.runelite.api.clan.ClanSettings;
+import net.runelite.api.clan.ClanTitle;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.gameval.VarbitID;
+import net.runelite.api.kit.KitType;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.Subscribe;
@@ -50,9 +59,11 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.IOException;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -105,6 +116,31 @@ public class DataManager {
     private final HashMap<Integer, Integer> varbData = new HashMap<>();
     private final HashMap<Integer, Integer> varpData = new HashMap<>();
     private final HashMap<String, Integer> levelData = new HashMap<>();
+    private final HashMap<String, Long> xpData = new HashMap<>();
+    private final HashMap<String, Integer> combatAchievementData = new HashMap<>();
+    private final HashMap<String, Map<String, Integer>> achievementDiaryData = new HashMap<>();
+    private ClanData clanData = null;
+    private PlayerAppearance playerAppearance = null;
+    private final ConcurrentLinkedQueue<DropActivity> pendingDropActivities = new ConcurrentLinkedQueue<>();
+
+    // Achievement Diary names - order matches the diary ids taken by script 2200
+    private static final String[] DIARY_NAMES = {
+            "Karamja",
+            "Ardougne",
+            "Falador",
+            "Fremennik",
+            "Kandarin",
+            "Desert",
+            "Lumbridge",
+            "Morytania",
+            "Varrock",
+            "Wilderness",
+            "Western",
+            "Kourend"
+    };
+
+    // Only drops worth at least this much GE value are tracked as activities
+    private static final long VALUABLE_DROP_THRESHOLD = 100000L;
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
@@ -135,8 +171,6 @@ public class DataManager {
         }
     }
 
-    // private static final String MOCK_API_URI =
-    // "https://a278d141-927f-433b-8e4b-6d994067900d.mock.pstmn.io/api/";
     private static final String API_URI = EmbargoApi.BASE_URL;
     private static final String MANIFEST_ENDPOINT = API_URI + APIRoutes.MANIFEST;
     private static final String UNTRACKABLE_POST_ENDPOINT = API_URI + APIRoutes.UNTRACKABLES;
@@ -647,11 +681,176 @@ public class DataManager {
         }
     }
 
+    public void storeSkillChanged(String skill, int skillLevel, long xp) {
+        synchronized (this) {
+            levelData.put(skill, skillLevel);
+            xpData.put(skill, xp);
+        }
+    }
+
     public void storeSkillChangedIfNotChanged(String skill, int skillLevel) {
         synchronized (this) {
             if (!levelData.containsKey(skill))
                 storeSkillChanged(skill, skillLevel);
         }
+    }
+
+    /**
+     * Captures combat achievement completion counts per tier. MUST be called
+     * from the client thread.
+     */
+    public void captureCombatAchievements() {
+        if (client.getGameState() != GameState.LOGGED_IN) {
+            return;
+        }
+
+        synchronized (this) {
+            combatAchievementData.put("easy", client.getVarbitValue(VarbitID.CA_TOTAL_TASKS_COMPLETED_EASY));
+            combatAchievementData.put("medium", client.getVarbitValue(VarbitID.CA_TOTAL_TASKS_COMPLETED_MEDIUM));
+            combatAchievementData.put("hard", client.getVarbitValue(VarbitID.CA_TOTAL_TASKS_COMPLETED_HARD));
+            combatAchievementData.put("elite", client.getVarbitValue(VarbitID.CA_TOTAL_TASKS_COMPLETED_ELITE));
+            combatAchievementData.put("master", client.getVarbitValue(VarbitID.CA_TOTAL_TASKS_COMPLETED_MASTER));
+            combatAchievementData.put("grandmaster",
+                    client.getVarbitValue(VarbitID.CA_TOTAL_TASKS_COMPLETED_GRANDMASTER));
+        }
+    }
+
+    /**
+     * Captures achievement diary completion counts using script 2200. MUST be
+     * called from the client thread.
+     */
+    public void captureAchievementDiaries() {
+        if (client.getGameState() != GameState.LOGGED_IN) {
+            return;
+        }
+
+        for (int diaryId = 0; diaryId < DIARY_NAMES.length; diaryId++) {
+            try {
+                // https://github.com/RuneStar/cs2-scripts/blob/master/scripts/%5Bproc%2Cdiary_completion_info%5D.cs2
+                client.runScript(2200, diaryId);
+                int[] stack = client.getIntStack();
+
+                Map<String, Integer> tiers = new HashMap<>();
+                tiers.put("easy", stack[0]);
+                tiers.put("medium", stack[3]);
+                tiers.put("hard", stack[6]);
+                tiers.put("elite", stack[9]);
+
+                synchronized (this) {
+                    achievementDiaryData.put(DIARY_NAMES[diaryId], tiers);
+                }
+            } catch (Exception e) {
+                log.debug("Failed to capture diary data for {}", DIARY_NAMES[diaryId], e);
+            }
+        }
+    }
+
+    /**
+     * Captures the player's current clan name, member count, and their own
+     * rank, title, and join date. MUST be called from the client thread.
+     */
+    public void captureClanData() {
+        ClanChannel clanChannel = client.getClanChannel();
+        ClanSettings clanSettings = client.getClanSettings();
+
+        int rank = -1;
+        String title = null;
+        long joinedAt = 0;
+
+        String localName = PlayerIdentity.getUsername(client);
+        if (clanSettings != null && localName != null) {
+            ClanMember member = clanSettings.findMember(localName);
+            if (member != null) {
+                if (member.getRank() != null) {
+                    rank = member.getRank().getRank();
+                    ClanTitle clanTitle = clanSettings.titleForRank(member.getRank());
+                    if (clanTitle != null) {
+                        title = clanTitle.getName();
+                    }
+                }
+                if (member.getJoinDate() != null) {
+                    joinedAt = member.getJoinDate()
+                            .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli();
+                }
+            }
+        }
+
+        synchronized (this) {
+            if (clanChannel == null) {
+                clanData = null;
+                return;
+            }
+
+            clanData = ClanData.builder()
+                    .clanName(clanChannel.getName())
+                    .memberCount(clanChannel.getMembers().size())
+                    .rank(rank)
+                    .title(title)
+                    .joinedAt(joinedAt)
+                    .build();
+        }
+    }
+
+    /**
+     * Captures the player's appearance (equipment, kit, and color ids). MUST be
+     * called from the client thread.
+     */
+    public void capturePlayerAppearance() {
+        Player localPlayer = client.getLocalPlayer();
+        PlayerComposition composition = localPlayer != null ? localPlayer.getPlayerComposition() : null;
+
+        synchronized (this) {
+            if (composition == null) {
+                playerAppearance = null;
+                return;
+            }
+
+            KitType[] kitTypes = KitType.values();
+            int[] kitIds = new int[kitTypes.length];
+            for (int i = 0; i < kitTypes.length; i++) {
+                kitIds[i] = composition.getKitId(kitTypes[i]);
+            }
+
+            playerAppearance = PlayerAppearance.builder()
+                    .equipmentIds(composition.getEquipmentIds() != null ? composition.getEquipmentIds().clone()
+                            : new int[0])
+                    .kitIds(kitIds)
+                    .colors(composition.getColors() != null ? composition.getColors().clone() : new int[0])
+                    .gender(composition.getGender())
+                    .npcTransformId(composition.getTransformedNpcId())
+                    .build();
+        }
+    }
+
+    /**
+     * Queues drops above {@link #VALUABLE_DROP_THRESHOLD} GE value for
+     * submission with the next data push.
+     */
+    public void trackValuableDrop(LootReceived event) {
+        for (ItemStack item : event.getItems()) {
+            long geValue = (long) itemManager.getItemPrice(item.getId()) * item.getQuantity();
+            if (geValue >= VALUABLE_DROP_THRESHOLD) {
+                pendingDropActivities.add(DropActivity.builder()
+                        .itemName(itemManager.getItemComposition(item.getId()).getName())
+                        .itemId(item.getId())
+                        .quantity(item.getQuantity())
+                        .geValue(geValue)
+                        .source(event.getName())
+                        .sourceType(event.getType().name())
+                        .timestamp(Instant.now().toEpochMilli())
+                        .world(client.getWorld())
+                        .build());
+            }
+        }
+    }
+
+    private List<DropActivity> drainDropQueue() {
+        List<DropActivity> batch = new ArrayList<>();
+        DropActivity activity;
+        while ((activity = pendingDropActivities.poll()) != null) {
+            batch.add(activity);
+        }
+        return batch;
     }
 
     private <K, V> HashMap<K, V> clearChanges(HashMap<K, V> h) {
@@ -671,11 +870,21 @@ public class DataManager {
             varbData.clear();
             varpData.clear();
             levelData.clear();
+            xpData.clear();
+            combatAchievementData.clear();
+            achievementDiaryData.clear();
+            clanData = null;
+            playerAppearance = null;
+            pendingDropActivities.clear();
         }
     }
 
     private boolean hasDataToPush() {
-        return !(varbData.isEmpty() && varpData.isEmpty() && levelData.isEmpty());
+        synchronized (this) {
+            return !(varbData.isEmpty() && varpData.isEmpty() && levelData.isEmpty()
+                    && xpData.isEmpty() && combatAchievementData.isEmpty() && achievementDiaryData.isEmpty()
+                    && clanData == null && playerAppearance == null && pendingDropActivities.isEmpty());
+        }
     }
 
     private JsonObject convertToJson() {
@@ -688,10 +897,36 @@ public class DataManager {
             HashMap<Integer, Integer> tempVarbData = clearChanges(varbData);
             HashMap<Integer, Integer> tempVarpData = clearChanges(varpData);
             HashMap<String, Integer> tempLevelData = clearChanges(levelData);
+            HashMap<String, Long> tempXpData = clearChanges(xpData);
+            HashMap<String, Integer> tempCaData = clearChanges(combatAchievementData);
+            HashMap<String, Map<String, Integer>> tempDiaryData = clearChanges(achievementDiaryData);
+            List<DropActivity> tempDrops = drainDropQueue();
 
             j.add("varb", gson.toJsonTree(tempVarbData));
             j.add("varp", gson.toJsonTree(tempVarpData));
             j.add("level", gson.toJsonTree(tempLevelData));
+
+            // New data types are drained on send and only included when present
+            if (!tempXpData.isEmpty()) {
+                j.add("xp", gson.toJsonTree(tempXpData));
+            }
+            if (!tempCaData.isEmpty()) {
+                j.add("combatAchievements", gson.toJsonTree(tempCaData));
+            }
+            if (!tempDiaryData.isEmpty()) {
+                j.add("achievementDiaries", gson.toJsonTree(tempDiaryData));
+            }
+            if (clanData != null) {
+                j.add("clan", gson.toJsonTree(clanData));
+                clanData = null;
+            }
+            if (playerAppearance != null) {
+                j.add("appearance", gson.toJsonTree(playerAppearance));
+                playerAppearance = null;
+            }
+            if (!tempDrops.isEmpty()) {
+                j.add("drops", gson.toJsonTree(tempDrops));
+            }
 
             parent.addProperty("username", PlayerIdentity.getUsername(client));
             parent.addProperty("profile", r.name());
@@ -720,53 +955,109 @@ public class DataManager {
             for (String k : levelObj.keySet()) {
                 this.storeSkillChangedIfNotChanged(k, levelObj.get(k).getAsInt());
             }
+
+            if (dataObj.has("xp")) {
+                JsonObject xpObj = dataObj.getAsJsonObject("xp");
+                for (String k : xpObj.keySet()) {
+                    xpData.putIfAbsent(k, xpObj.get(k).getAsLong());
+                }
+            }
+
+            if (dataObj.has("combatAchievements")) {
+                JsonObject caObj = dataObj.getAsJsonObject("combatAchievements");
+                for (String k : caObj.keySet()) {
+                    combatAchievementData.putIfAbsent(k, caObj.get(k).getAsInt());
+                }
+            }
+
+            if (dataObj.has("achievementDiaries")) {
+                JsonObject diaryObj = dataObj.getAsJsonObject("achievementDiaries");
+                for (String diaryName : diaryObj.keySet()) {
+                    if (!achievementDiaryData.containsKey(diaryName)) {
+                        JsonObject tiersObj = diaryObj.getAsJsonObject(diaryName);
+                        Map<String, Integer> tiers = new HashMap<>();
+                        for (String tier : tiersObj.keySet()) {
+                            tiers.put(tier, tiersObj.get(tier).getAsInt());
+                        }
+                        achievementDiaryData.put(diaryName, tiers);
+                    }
+                }
+            }
+
+            if (dataObj.has("clan") && clanData == null) {
+                clanData = gson.fromJson(dataObj.get("clan"), ClanData.class);
+            }
+
+            if (dataObj.has("appearance") && playerAppearance == null) {
+                playerAppearance = gson.fromJson(dataObj.get("appearance"), PlayerAppearance.class);
+            }
+
+            if (dataObj.has("drops")) {
+                for (JsonElement elem : dataObj.getAsJsonArray("drops")) {
+                    pendingDropActivities.add(gson.fromJson(elem, DropActivity.class));
+                }
+            }
         }
     }
 
     protected void submitToAPI() {
-        if (!hasDataToPush() || client.getLocalPlayer() == null || PlayerIdentity.getUsername(client) == null
-                || stopTryingForAccount.get())
-            return;
-
-        if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD)
-            return;
-
-        isUserRegisteredAsync(PlayerIdentity.getUsername(client), isRegistered -> {
-            if (!isRegistered) {
+        // All client state reads happen on the client thread; invoke() runs the
+        // callback inline when already on it
+        clientThread.invoke(() -> {
+            if (!hasDataToPush() || client.getLocalPlayer() == null || PlayerIdentity.getUsername(client) == null
+                    || stopTryingForAccount.get())
                 return;
-            }
 
-            if (client.getGameState() == GameState.LOGIN_SCREEN || client.getGameState() == GameState.HOPPING) {
+            if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD)
                 return;
-            }
 
-            try {
-                JsonObject payload = convertToJson();
+            String username = PlayerIdentity.getUsername(client);
+            isUserRegisteredAsync(username, isRegistered -> {
+                if (!isRegistered) {
+                    return;
+                }
 
-                okHttpClient.newCall(new Request.Builder().url(UNTRACKABLE_POST_ENDPOINT)
-                        .post(RequestBody.create(JSON, payload.toString())).build()).enqueue(new Callback() {
-                            @Override
-                            public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                                log.error(e.getLocalizedMessage());
-                                restoreData(payload);
-                                log.error("Failed to submit player in submitToAPI, restoring data. Cause of failure:",
-                                        e);
-                            }
+                // This callback runs on an OkHttp thread, so hop back to the
+                // client thread before reading client state and building the payload
+                clientThread.invoke(() -> {
+                    if (client.getGameState() == GameState.LOGIN_SCREEN
+                            || client.getGameState() == GameState.HOPPING) {
+                        return;
+                    }
 
-                            @Override
-                            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                                try (response) {
-                                    if (response.isSuccessful()) {
-                                        log.debug("Successfully uploaded untrackable items");
-                                    } else {
-                                        log.error("submitToAPI onResponse returned, but without success");
+                    if (!hasDataToPush()) {
+                        return;
+                    }
+
+                    try {
+                        JsonObject payload = convertToJson();
+
+                        okHttpClient.newCall(new Request.Builder().url(UNTRACKABLE_POST_ENDPOINT)
+                                .post(RequestBody.create(JSON, payload.toString())).build()).enqueue(new Callback() {
+                                    @Override
+                                    public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                                        log.error("Failed to submit player in submitToAPI, restoring data. Cause of failure:",
+                                                e);
+                                        clientThread.invoke(() -> restoreData(payload));
                                     }
-                                }
-                            }
-                        });
-            } catch (Exception e) {
-                log.error("Error preparing data for API submission", e);
-            }
+
+                                    @Override
+                                    public void onResponse(@NonNull Call call, @NonNull Response response)
+                                            throws IOException {
+                                        try (response) {
+                                            if (response.isSuccessful()) {
+                                                log.debug("Successfully uploaded untrackable items");
+                                            } else {
+                                                log.error("submitToAPI onResponse returned, but without success");
+                                            }
+                                        }
+                                    }
+                                });
+                    } catch (Exception e) {
+                        log.error("Error preparing data for API submission", e);
+                    }
+                });
+            });
         });
     }
 
@@ -789,7 +1080,37 @@ public class DataManager {
             storeVarpChanged(varpIndex, client.getVarpValue(varpIndex));
         }
         for (Skill s : Skill.values()) {
-            storeSkillChanged(s.getName(), client.getRealSkillLevel(s));
+            storeSkillChanged(s.getName(), client.getRealSkillLevel(s), client.getSkillExperience(s));
+        }
+
+        captureClanData();
+        capturePlayerAppearance();
+
+        // CA and diary data comes from varbits/scripts that need the game fully
+        // loaded, so arm a delayed capture instead of reading them here
+        loginTickCounter = 0;
+    }
+
+    // Counts game ticks after login so CA/diary capture waits for the game to
+    // finish loading; -1 means no capture is pending
+    private int loginTickCounter = -1;
+    private static final int TICKS_BEFORE_CAPTURE = 5;
+
+    /**
+     * Handles the delayed CA/diary capture armed by {@link #loadInitialData()}.
+     * Called from the plugin's GameTick subscriber, so it runs on the client
+     * thread.
+     */
+    public void onGameTickForCapture() {
+        if (loginTickCounter < 0) {
+            return;
+        }
+
+        if (++loginTickCounter >= TICKS_BEFORE_CAPTURE) {
+            loginTickCounter = -1;
+            captureCombatAchievements();
+            captureAchievementDiaries();
+            submitToAPI();
         }
     }
 
@@ -993,33 +1314,39 @@ public class DataManager {
         if (stopTryingForAccount.get()) {
             return;
         }
-        if (client != null
-                && (client.getGameState() != GameState.HOPPING && client.getGameState() != GameState.LOGIN_SCREEN)) {
-            submitToAPI();
-            if (client.getLocalPlayer() != null) {
-                String username = PlayerIdentity.getUsername(client);
+        // This runs on a scheduler thread, so hop to the client thread before
+        // reading any client state
+        clientThread.invoke(() -> {
+            if (client != null
+                    && (client.getGameState() != GameState.HOPPING
+                            && client.getGameState() != GameState.LOGIN_SCREEN)) {
+                submitToAPI();
+                if (client.getLocalPlayer() != null) {
+                    String username = PlayerIdentity.getUsername(client);
 
-                isUserRegisteredAsync(username, isRegistered -> {
-                    if (isRegistered) {
-                        embargoPanel.updateLoggedIn(true);
-                    } else if (isInApiFailureMode()) {
-                        // Transient API/network failure: the false result is not
-                        // authoritative. Do NOT log out or wipe the panel; keep the
-                        // currently displayed data and let a later retry refresh it.
-                        log.debug("Registration check failed transiently (API failure mode); preserving panel state");
-                    } else {
-                        embargoPanel.isLoggedIn = false;
-                        embargoPanel.updateLoggedIn(false);
-                        embargoPanel.logOut();
-                    }
-                });
+                    isUserRegisteredAsync(username, isRegistered -> {
+                        if (isRegistered) {
+                            embargoPanel.updateLoggedIn(true);
+                        } else if (isInApiFailureMode()) {
+                            // Transient API/network failure: the false result is not
+                            // authoritative. Do NOT log out or wipe the panel; keep the
+                            // currently displayed data and let a later retry refresh it.
+                            log.debug(
+                                    "Registration check failed transiently (API failure mode); preserving panel state");
+                        } else {
+                            embargoPanel.isLoggedIn = false;
+                            embargoPanel.updateLoggedIn(false);
+                            embargoPanel.logOut();
+                        }
+                    });
+                }
+            } else {
+                // log.debug("User is hopping or logged out, do not send data");
+                embargoPanel.isLoggedIn = false;
+                embargoPanel.updateLoggedIn(false);
+                embargoPanel.logOut();
             }
-        } else {
-            // log.debug("User is hopping or logged out, do not send data");
-            embargoPanel.isLoggedIn = false;
-            embargoPanel.updateLoggedIn(false);
-            embargoPanel.logOut();
-        }
+        });
     }
 
 }

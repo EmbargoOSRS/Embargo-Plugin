@@ -57,4 +57,15 @@ public class Manifest
     public Map<String, String> itemRenames = new HashMap<>();
     public Map<String, String> npcRenames = new HashMap<>();
 
+    // Remote feature kill switches: a feature key mapped to false disables
+    // that feature for all clients without a plugin release. Missing keys
+    // mean enabled.
+    public Map<String, Boolean> features = new HashMap<>();
+
+    // Staff announcements shown in-game as broadcast chat lines
+    public List<Announcement> announcements = new ArrayList<>();
+
+    // Scheduled clan events rendered in the side panel
+    public List<ClanEvent> schedule = new ArrayList<>();
+
 }
