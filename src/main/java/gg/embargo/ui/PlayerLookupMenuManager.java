@@ -5,7 +5,10 @@ import gg.embargo.EmbargoConfig;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
+import net.runelite.api.clan.ClanChannel;
+import net.runelite.api.clan.ClanChannelMember;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.client.eventbus.EventBus;
@@ -70,12 +73,28 @@ public class PlayerLookupMenuManager {
 
     @Subscribe
     public void onMenuEntryAdded(MenuEntryAdded event) {
-        if (!config.showLookupMenuOption() || !AFTER_OPTIONS.contains(event.getOption())) {
+        if (!config.showLookupMenuOption()) {
+            return;
+        }
+
+        // The world right-click menu item is added to every player via
+        // addPlayerMenuItem; strip it back off unless the player is in our clan.
+        MenuEntry menuEntry = event.getMenuEntry();
+        if (menuEntry.getType() == MenuAction.RUNELITE_PLAYER && LOOKUP.equals(event.getOption())) {
+            Player player = menuEntry.getPlayer();
+            if (player == null || player.getName() == null || !isClanMember(player.getName())) {
+                client.getMenu().removeMenuEntry(menuEntry);
+            }
+            return;
+        }
+
+        // Name entries in the friends/ignore/clan/chat lists.
+        if (!AFTER_OPTIONS.contains(event.getOption())) {
             return;
         }
 
         String target = Text.removeTags(event.getTarget());
-        if (target.isEmpty()) {
+        if (target.isEmpty() || !isClanMember(target)) {
             return;
         }
 
@@ -84,6 +103,25 @@ public class PlayerLookupMenuManager {
                 .setTarget(event.getTarget())
                 .setType(MenuAction.RUNELITE)
                 .onClick(e -> lookup(Text.removeTags(e.getTarget())));
+    }
+
+    /**
+     * Whether the given player name belongs to a member of the local player's
+     * clan channel. Names are normalised the same way the notice board does.
+     */
+    private boolean isClanMember(String name) {
+        ClanChannel clanChannel = client.getClanChannel();
+        if (clanChannel == null) {
+            return false;
+        }
+
+        String jagexName = Text.toJagexName(name);
+        for (ClanChannelMember member : clanChannel.getMembers()) {
+            if (Text.toJagexName(member.getName()).equals(jagexName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Subscribe
