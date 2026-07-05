@@ -295,5 +295,90 @@ public interface EmbargoConfig extends Config
         return true;
     }
 
+    @ConfigSection(
+            name = "Clan Platform",
+            description = "Clan announcements, event schedule, and automatic tracking features",
+            position = 8
+    )
+    String clanPlatformSettings = "ClanPlatformSettings";
+
+    @ConfigItem(
+            keyName = "showClanAnnouncements",
+            name = "Show Announcements",
+            description = "Show staff clan announcements in your game chat",
+            position = 0,
+            section = clanPlatformSettings
+    )
+    default boolean showClanAnnouncements() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "enablePbTracking",
+            name = "Track Personal Bests",
+            description = "Automatically submit boss kill times and personal bests to Embargo for clan leaderboards",
+            position = 1,
+            section = clanPlatformSettings
+    )
+    default boolean enablePbTracking() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "enablePetAttribution",
+            name = "Track Pet Drops",
+            description = "Automatically report pet drops and their likely source to Embargo",
+            position = 2,
+            section = clanPlatformSettings
+    )
+    default boolean enablePetAttribution() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "enableNameChangeSync",
+            name = "Sync Name Changes",
+            description = "Report RuneScape name changes seen in your friends/clan lists so the clan roster stays current",
+            position = 3,
+            section = clanPlatformSettings
+    )
+    default boolean enableNameChangeSync() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "showLookupMenuOption",
+            name = "Right-click Embargo Lookup",
+            description = "Add an 'Embargo Lookup' option when right-clicking players to view their profile",
+            position = 4,
+            section = clanPlatformSettings
+    )
+    default boolean showLookupMenuOption() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "showEventSchedule",
+            name = "Show Event Schedule",
+            description = "Show the clan event schedule in the side panel",
+            position = 5,
+            section = clanPlatformSettings
+    )
+    default boolean showEventSchedule() {
+        return true;
+    }
+
+    @Range(min = 1, max = 60)
+    @ConfigItem(
+            keyName = "eventNotifyMinutes",
+            name = "Event Reminder (minutes)",
+            description = "How many minutes before a subscribed event starts to send a desktop notification",
+            position = 6,
+            section = clanPlatformSettings
+    )
+    default int eventNotifyMinutes() {
+        return 10;
+    }
+
 }
 

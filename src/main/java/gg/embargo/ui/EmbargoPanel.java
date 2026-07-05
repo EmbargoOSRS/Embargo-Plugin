@@ -89,6 +89,9 @@ public class EmbargoPanel extends PluginPanel {
     private BingoManager bingoManager;
 
     @Inject
+    private ClanSchedulePanel clanSchedulePanel;
+
+    @Inject
     private OkHttpClient okHttpClient;
 
     @Setter
@@ -1685,8 +1688,35 @@ public class EmbargoPanel extends PluginPanel {
         eventsContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, eventsContainer.getPreferredSize().height));
         centerWrapper.add(eventsContainer);
 
+        // Setup and add the clan event schedule section
+        if (config == null || config.showEventSchedule()) {
+            centerWrapper.add(setupSchedulePanel());
+        }
+
         this.add(centerWrapper, BorderLayout.CENTER);
         this.add(this.setUpQuickLinks(), BorderLayout.SOUTH);
+    }
+
+    /**
+     * Wraps the clan schedule panel in a titled container matching the other
+     * side-panel sections.
+     */
+    private JPanel setupSchedulePanel() {
+        JPanel container = createVerticalPanel();
+        container.setBorder(BorderFactory.createCompoundBorder(
+                new MatteBorder(1, 0, 0, 0, ColorScheme.LIGHT_GRAY_COLOR),
+                new EmptyBorder(10, 10, 10, 10)));
+        container.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        container.add(createHeader("Event Schedule", true));
+        container.add(Box.createVerticalStrut(8));
+
+        clanSchedulePanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        container.add(clanSchedulePanel);
+
+        container.setMaximumSize(new Dimension(Integer.MAX_VALUE, container.getPreferredSize().height));
+        clanSchedulePanel.startUp();
+        return container;
     }
 
     void setupSidePanel() {
@@ -1858,6 +1888,8 @@ public class EmbargoPanel extends PluginPanel {
             bingoManager.removeStateChangeListener(bingoStateChangeListener);
             bingoStateChangeListener = null;
         }
+
+        clanSchedulePanel.shutDown();
 
         missingRequirementsComponent.shutdown();
         this.updateLoggedIn(false);

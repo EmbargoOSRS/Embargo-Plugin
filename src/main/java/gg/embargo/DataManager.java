@@ -39,6 +39,9 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.clan.ClanChannel;
+import net.runelite.api.clan.ClanMember;
+import net.runelite.api.clan.ClanSettings;
+import net.runelite.api.clan.ClanTitle;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.kit.KitType;
@@ -56,6 +59,7 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.IOException;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -742,11 +746,34 @@ public class DataManager {
     }
 
     /**
-     * Captures the player's current clan name and member count. MUST be called
-     * from the client thread.
+     * Captures the player's current clan name, member count, and their own
+     * rank, title, and join date. MUST be called from the client thread.
      */
     public void captureClanData() {
         ClanChannel clanChannel = client.getClanChannel();
+        ClanSettings clanSettings = client.getClanSettings();
+
+        int rank = -1;
+        String title = null;
+        long joinedAt = 0;
+
+        String localName = PlayerIdentity.getUsername(client);
+        if (clanSettings != null && localName != null) {
+            ClanMember member = clanSettings.findMember(localName);
+            if (member != null) {
+                if (member.getRank() != null) {
+                    rank = member.getRank().getRank();
+                    ClanTitle clanTitle = clanSettings.titleForRank(member.getRank());
+                    if (clanTitle != null) {
+                        title = clanTitle.getName();
+                    }
+                }
+                if (member.getJoinDate() != null) {
+                    joinedAt = member.getJoinDate()
+                            .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli();
+                }
+            }
+        }
 
         synchronized (this) {
             if (clanChannel == null) {
@@ -757,6 +784,9 @@ public class DataManager {
             clanData = ClanData.builder()
                     .clanName(clanChannel.getName())
                     .memberCount(clanChannel.getMembers().size())
+                    .rank(rank)
+                    .title(title)
+                    .joinedAt(joinedAt)
                     .build();
         }
     }
